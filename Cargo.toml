@@ -1,0 +1,28 @@
+[workspace]
+resolver = "2"
+members = [
+    "contracts/shared",
+    "contracts/compliance",
+    "contracts/verifier",
+    "contracts/payroll",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+authors = ["Zkoster"]
+
+[workspace.dependencies]
+soroban-sdk = "26.1.0"
+zkoster-types = { path = "contracts/shared" }
+
+[profile.release]
+opt-level = "z"
+overflow-checks = true
+debug = 0
+strip = "symbols"
+debug-assertions = false
+panic = "abort"
+codegen-units = 1
+lto = true
