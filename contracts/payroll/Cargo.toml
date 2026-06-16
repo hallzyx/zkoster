@@ -1,0 +1,23 @@
+[package]
+name = "zkoster-payroll"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+doctest = false
+
+[dependencies]
+soroban-sdk = { workspace = true }
+zkoster-types = { workspace = true }
+
+[dev-dependencies]
+# The real contract crates are pulled in only for tests, where they are
+# registered in the test env. They are NOT runtime dependencies: cross-contract
+# calls go through `#[contractclient]` interfaces (see src/clients.rs) so the
+# wasm build does not pull in their exported symbols.
+soroban-sdk = { workspace = true, features = ["testutils"] }
+zkoster-compliance = { path = "../compliance" }
+zkoster-verifier = { path = "../verifier" }
