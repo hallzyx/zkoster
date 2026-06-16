@@ -134,8 +134,20 @@ make bindings NAME=payroll ID=<contract-id> NETWORK=testnet
   - **G2**: `x.c1 ‖ x.c0 ‖ y.c1 ‖ y.c0` (EIP-197 ordering, 128 bytes).
   - **Fr** (public inputs): 32-byte big-endian.
 
+### Prover
+
+The host-side prover that generates commitments, range proofs and the VK lives
+in [`../prover`](../prover). Its `tests/onchain.rs` proves the artifacts verify
+against this contract on-chain (no mocks). Demo flow:
+
+1. `zkoster-prover gen --amounts ...` → VK + per-payout commitment/proof + total.
+2. `verifier.set_vk(vk)` (once).
+3. `payroll.add_payout(commitment)`, `review_batch(total)`, `execute_payout(proof, [public_input])`.
+
 ### Remaining for production
 
-- The **payout range-proof circuit** (Noir) is not yet written — the fixture
-  circuit (`a·b == c`) only validates the verifier, not the payroll semantics.
-- `set_vk` must be called with that circuit's real verifying key before use.
+- **Range-proof hardening:** the prover's circuit binds the amount to a field
+  commitment; linking it cryptographically to the Pedersen EC commitment (an
+  in-circuit EC opening) is the production step. See [`../prover/README.md`](../prover/README.md).
+- A Noir rewrite of the circuit is optional — the arkworks circuit already
+  produces proofs the on-chain verifier accepts.

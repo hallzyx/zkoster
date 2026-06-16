@@ -34,7 +34,8 @@ Three contracts in `/contracts/`:
 - Groth16 (`verify_groth16`) covers what the homomorphism can't: per-payout **range proofs**. Built on soroban-sdk 26 BN254 host functions (`e.crypto().bn254()`).
 - `Bn254G1Affine` has no `to_bytes`/`PartialEq` — point equality is only expressible via `pairing_check`.
 - **Verification is validated with REAL proofs** in [contracts/verifier/tests/groth16_real.rs](contracts/verifier/tests/groth16_real.rs): arkworks generates a genuine Groth16 proof + real Pedersen commitments, the test asserts the on-chain verifier accepts them and rejects tampering. Confirmed serialization: G1 `x‖y` BE (64B), G2 `x.c1‖x.c0‖y.c1‖y.c0` EIP-197 (128B), Fr 32B BE. In-crate unit tests still cover only deterministic paths; the real-crypto checks live in the integration test (uses `ark-*` dev-deps).
-- **Still pending:** the production payout range-proof circuit (Noir) and its VK. The fixture circuit (`a·b==c`) validates the verifier, not payroll semantics.
+- **Prover:** [prover/](prover/) is a standalone (workspace-excluded) arkworks tool that generates Pedersen commitments, Groth16 **range proofs** (amount ∈ `[0,2^64)`) and the VK. CLI (`gen`) + HTTP (`serve`). `prover/tests/onchain.rs` proves its output verifies against the real `ZkosterVerifier` contract — closing the prover↔verifier loop with no mocks.
+- **Still pending (hardening):** the range proof binds to a field commitment, not yet cryptographically to the Pedersen EC commitment (in-circuit EC opening). A Noir rewrite is optional.
 
 ### Privacy Primitives (Stellar-native)
 
