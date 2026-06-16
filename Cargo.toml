@@ -6,6 +6,9 @@ members = [
     "contracts/verifier",
     "contracts/payroll",
 ]
+# The prover is a host-side tool (arkworks, std) — not a wasm contract — so it
+# lives in its own standalone workspace.
+exclude = ["prover"]
 
 [workspace.package]
 version = "0.1.0"

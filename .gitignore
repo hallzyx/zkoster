@@ -1,5 +1,5 @@
 # --- Rust / Cargo ---
-/target
+target/
 **/*.rs.bk
 # Cargo.lock IS committed: these contracts are deployable artifacts and we want
 # reproducible builds.

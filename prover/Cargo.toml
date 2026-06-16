@@ -1,0 +1,36 @@
+# Standalone workspace: this is a host-side tool, not a wasm contract.
+[workspace]
+
+[package]
+name = "zkoster-prover"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+
+[lib]
+name = "zkoster_prover"
+path = "src/lib.rs"
+
+[[bin]]
+name = "zkoster-prover"
+path = "src/main.rs"
+
+[dependencies]
+ark-bn254 = "0.5"
+ark-groth16 = "0.5"
+ark-relations = "0.5"
+ark-ff = "0.5"
+ark-ec = "0.5"
+ark-snark = "0.5"
+ark-std = "0.5"
+clap = { version = "4", features = ["derive"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+hex = "0.4"
+# HTTP endpoint for live proof requests.
+axum = "0.7"
+tokio = { version = "1", features = ["rt-multi-thread", "net"] }
+
+[dev-dependencies]
+soroban-sdk = { version = "26.1.0", features = ["testutils"] }
+zkoster-verifier = { path = "../contracts/verifier" }
