@@ -13,6 +13,16 @@ export function formatUsd(amount: number): string {
   }).format(amount);
 }
 
+// UI ↔ on-chain amount scaling. The UI works in scaled units; the contract and
+// token work in `ui / scale`. See AppConfig.displayScale.
+export function toRealAmount(uiAmount: number, scale: number): number {
+  return uiAmount / scale;
+}
+
+export function toUiAmount(realAmount: number, scale: number): number {
+  return realAmount * scale;
+}
+
 export function shortWallet(wallet: string): string {
   if (wallet.length <= 12) return wallet;
   return `${wallet.slice(0, 6)}…${wallet.slice(-4)}`;

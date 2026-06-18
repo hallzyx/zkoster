@@ -25,6 +25,21 @@ export interface AppConfig {
   dataSource: DataSource;
   proverUrl: string | null;
   chain: ChainConfig | null;
+  /**
+   * UI ↔ on-chain amount factor. The UI shows/accepts amounts multiplied by
+   * this; the contract and token use `uiAmount / displayScale`. Lets a demo
+   * with little testnet USDC display realistic figures.
+   */
+  displayScale: number;
+}
+
+const DEFAULT_DISPLAY_SCALE = 1000;
+
+function readDisplayScale(): number {
+  const raw = process.env.ZKOSTER_DISPLAY_SCALE;
+  if (!raw) return DEFAULT_DISPLAY_SCALE;
+  const n = Number(raw);
+  return Number.isFinite(n) && n > 0 ? n : DEFAULT_DISPLAY_SCALE;
 }
 
 function readChainConfig(): ChainConfig {
@@ -66,5 +81,6 @@ export function getConfig(): AppConfig {
     dataSource,
     proverUrl: process.env.ZKOSTER_PROVER_URL ?? null,
     chain: dataSource === DATA_SOURCE.CHAIN ? readChainConfig() : null,
+    displayScale: readDisplayScale(),
   };
 }
