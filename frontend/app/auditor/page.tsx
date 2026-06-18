@@ -30,6 +30,8 @@ function amountVisible(grant: Grant, payoutId: number): boolean {
   return false; // totals only
 }
 
+export const dynamic = "force-dynamic";
+
 export default async function AuditorView() {
   const grants = await getGranteeGrants(DEMO_AUDITOR_WALLET);
   const sections = await Promise.all(

@@ -12,6 +12,8 @@ import {
 import { PAYOUT_STATUS, ROLE, type Batch } from "@/lib/types";
 import { formatPeriod, formatUsd } from "@/lib/utils";
 
+export const dynamic = "force-dynamic";
+
 export default async function EmployeePortal() {
   const [member, payouts, batches] = await Promise.all([
     getMember(DEMO_EMPLOYEE_WALLET),

@@ -12,6 +12,8 @@ import { getBatch, getBatchPayouts } from "@/lib/data";
 import { PAYOUT_STATUS, ROLE } from "@/lib/types";
 import { formatPeriod, formatUsd, shortWallet } from "@/lib/utils";
 
+export const dynamic = "force-dynamic";
+
 export default async function BatchDetail({
   params,
 }: {

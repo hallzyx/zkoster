@@ -8,6 +8,9 @@ import { getCompany, getMembers, listBatches } from "@/lib/data";
 import { BATCH_STATUS, ROLE } from "@/lib/types";
 import { formatPeriod, formatUsd } from "@/lib/utils";
 
+// Always render server-side so live chain reads are fresh (not prerendered).
+export const dynamic = "force-dynamic";
+
 export default async function AdminDashboard() {
   const [company, batches, members] = await Promise.all([
     getCompany(),

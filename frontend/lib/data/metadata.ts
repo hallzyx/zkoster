@@ -14,11 +14,16 @@ import {
   type Member,
   type PayoutStatus,
 } from "@/lib/types";
+import { roleWallet } from "@/lib/wallets";
 
+// Role identities resolve to the real testnet wallets derived from the secret
+// keys; when those aren't configured (pure mock demo) the placeholders are used.
+// The same identities key both the mock seed and the chain queries.
+const ADMIN_WALLET = roleWallet.admin ?? "GADMINFINANCEOPS0000000000000000000000000000000000000000";
 export const DEMO_EMPLOYEE_WALLET =
-  "GEMP1SOFIAGIMENEZ00000000000000000000000000000000000000";
+  roleWallet.employee ?? "GEMP1SOFIAGIMENEZ00000000000000000000000000000000000000";
 export const DEMO_AUDITOR_WALLET =
-  "GAUDITEXTERNALLLP000000000000000000000000000000000000000";
+  roleWallet.auditor ?? "GAUDITEXTERNALLLP000000000000000000000000000000000000000";
 
 export const company: Company = {
   name: "Aurora Labs",
@@ -27,7 +32,7 @@ export const company: Company = {
 };
 
 export const members: Member[] = [
-  { wallet: "GADMINFINANCEOPS0000000000000000000000000000000000000000", displayName: "Finance Ops", role: ROLE.ADMIN, status: MEMBER_STATUS.AUTHORIZED },
+  { wallet: ADMIN_WALLET, displayName: "Finance Ops", role: ROLE.ADMIN, status: MEMBER_STATUS.AUTHORIZED },
   { wallet: DEMO_EMPLOYEE_WALLET, displayName: "Sofía Giménez", role: ROLE.EMPLOYEE, status: MEMBER_STATUS.AUTHORIZED },
   { wallet: "GEMP2MARCUSLEE0000000000000000000000000000000000000000000", displayName: "Marcus Lee", role: ROLE.EMPLOYEE, status: MEMBER_STATUS.AUTHORIZED },
   { wallet: "GEMP3AMARAOKAFOR00000000000000000000000000000000000000000", displayName: "Amara Okafor", role: ROLE.EMPLOYEE, status: MEMBER_STATUS.AUTHORIZED },
