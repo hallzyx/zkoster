@@ -117,6 +117,56 @@ const SCOPE_BY_TAG: Record<string, DisclosureScope> = {
   FullBatch: DISCLOSURE_SCOPE.FULL_BATCH,
 };
 
+// These contract enums use explicit integer discriminants (BatchStatus,
+// PayoutStatus, DisclosureScope are #[contracttype] enums declared as `X = n`),
+// so soroban encodes them as a plain u32 discriminant — scValToNative returns a
+// NUMBER, not a `{ tag }` variant. Index by discriminant; the BY_TAG maps remain
+// as a defensive fallback in case a future SDK surfaces the variant name instead.
+const BATCH_STATUS_BY_ID: BatchStatus[] = [
+  BATCH_STATUS.DRAFT,
+  BATCH_STATUS.REVIEWED,
+  BATCH_STATUS.APPROVED,
+  BATCH_STATUS.FUNDED,
+  BATCH_STATUS.PROCESSING,
+  BATCH_STATUS.PAID,
+  BATCH_STATUS.PARTIALLY_FLAGGED,
+  BATCH_STATUS.CLOSED,
+];
+
+const PAYOUT_STATUS_BY_ID: PayoutStatus[] = [
+  PAYOUT_STATUS.PENDING,
+  PAYOUT_STATUS.READY,
+  PAYOUT_STATUS.SUBMITTED,
+  PAYOUT_STATUS.PAID,
+  PAYOUT_STATUS.FAILED,
+  PAYOUT_STATUS.FLAGGED,
+  PAYOUT_STATUS.DISCLOSED,
+];
+
+const SCOPE_BY_ID: DisclosureScope[] = [
+  DISCLOSURE_SCOPE.TOTALS_ONLY,
+  DISCLOSURE_SCOPE.SAMPLE,
+  DISCLOSURE_SCOPE.FULL_BATCH,
+];
+
+/**
+ * Resolve a soroban enum value to its domain variant, handling both encodings:
+ * a numeric discriminant (the common case here) or a variant-name tag.
+ */
+function resolveEnum<T>(
+  raw: unknown,
+  byId: T[],
+  byTag: Record<string, T>,
+  fallback: T,
+): T {
+  if (typeof raw === "number") return byId[raw] ?? fallback;
+  if (typeof raw === "bigint") return byId[Number(raw)] ?? fallback;
+  const tag = enumTag(raw);
+  const asNum = Number(tag);
+  if (Number.isInteger(asNum) && byId[asNum] !== undefined) return byId[asNum];
+  return byTag[tag] ?? fallback;
+}
+
 // Raw on-chain shapes (snake_case field names from the contract structs).
 interface RawBatch {
   batch_id: bigint;
@@ -153,7 +203,12 @@ function decorateBatch(raw: RawBatch): Batch {
     periodStart: meta?.periodStart ?? "",
     periodEnd: meta?.periodEnd ?? "",
     asset: companyMeta.asset,
-    status: BATCH_STATUS_BY_TAG[enumTag(raw.status)] ?? BATCH_STATUS.DRAFT,
+    status: resolveEnum(
+      raw.status,
+      BATCH_STATUS_BY_ID,
+      BATCH_STATUS_BY_TAG,
+      BATCH_STATUS.DRAFT,
+    ),
     createdBy: raw.created_by,
     approvedBy: raw.approved_by ?? null,
     totalAmount: meta?.amounts.reduce((a, b) => a + b, 0) ?? 0,
@@ -170,7 +225,12 @@ function decoratePayout(raw: RawPayout): Payout {
     employeeWallet: raw.employee,
     employeeName: memberName(raw.employee),
     amount: cleartextAmount(batchId, raw.employee),
-    status: PAYOUT_STATUS_BY_TAG[enumTag(raw.status)] ?? PAYOUT_STATUS.PENDING,
+    status: resolveEnum(
+      raw.status,
+      PAYOUT_STATUS_BY_ID,
+      PAYOUT_STATUS_BY_TAG,
+      PAYOUT_STATUS.PENDING,
+    ),
     txRef: null,
     receiptRef: null,
   };
@@ -241,7 +301,12 @@ export async function getGranteeGrants(wallet: string): Promise<Grant[]> {
       payoutId: Number(g.payout_id),
       granteeWallet: g.grantee,
       granteeName: memberName(g.grantee),
-      scope: SCOPE_BY_TAG[enumTag(g.scope)] ?? DISCLOSURE_SCOPE.TOTALS_ONLY,
+      scope: resolveEnum(
+        g.scope,
+        SCOPE_BY_ID,
+        SCOPE_BY_TAG,
+        DISCLOSURE_SCOPE.TOTALS_ONLY,
+      ),
       expiresAt:
         Number(g.expires_at) === 0
           ? null
