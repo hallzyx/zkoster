@@ -15,6 +15,7 @@ import {
   type PayoutStatus,
 } from "@/lib/types";
 import { roleWallet } from "@/lib/wallets";
+import { shortWallet } from "@/lib/utils";
 
 // Role identities resolve to the real testnet wallets derived from the secret
 // keys; when those aren't configured (pure mock demo) the placeholders are used.
@@ -52,6 +53,48 @@ export interface SeedBatch {
   settlementRef: string | null;
   amounts: number[];
   statuses: PayoutStatus[];
+  /**
+   * Dynamic batches only: parallel array to amounts[], preserves ROW ORDER.
+   * wallets[i] ↔ amounts[i] — the same index used in prove/add_payout/execute.
+   * Static seed data leaves this undefined; lookups fall back to employees[].
+   */
+  wallets?: string[];
+  /**
+   * Dynamic batches only: optional CSV display names, parallel to wallets[].
+   * names[i] is the display name for wallets[i]; empty string means no name.
+   */
+  names?: string[];
+}
+
+// ---------------------------------------------------------------------------
+// Dynamic batch registry (in-memory, cleared on process restart)
+// ---------------------------------------------------------------------------
+//
+// Created batches via CSV upload are stored here so the read side (chain.ts
+// decorateBatch / decoratePayout) can look up the company's off-chain records
+// without querying the ledger for cleartext amounts (which are never on-chain).
+//
+// Lifecycle: registered immediately after createBatch() returns a batchId,
+// before any payout TXs. Lost on process restart — acceptable for hackathon demo.
+//
+// MUST be pinned on globalThis: a plain module-level Map is NOT shared across
+// Next.js App Router request boundaries — the server action that creates the
+// batch, the page render that reads it, and the execute action each get their
+// own module instance, so a module-local Map would always read back empty.
+// globalThis is the single per-process global, so all of them share one Map
+// (this is the same pattern used for a dev-time Prisma singleton). It also
+// survives Turbopack HMR. Still lost on a real process restart, as documented.
+
+const _globalForBatches = globalThis as unknown as {
+  __zkosterDynamicBatches?: Map<number, SeedBatch>;
+};
+const _dynamicBatches: Map<number, SeedBatch> =
+  _globalForBatches.__zkosterDynamicBatches ??
+  (_globalForBatches.__zkosterDynamicBatches = new Map<number, SeedBatch>());
+
+/** Register a dynamically created batch in the in-memory off-chain store. */
+export function registerDynamicBatch(batchId: number, data: SeedBatch): void {
+  _dynamicBatches.set(batchId, data);
 }
 
 export const seedBatches: SeedBatch[] = [
@@ -97,19 +140,50 @@ export const seedGrants: Grant[] = [
 ];
 
 /** Off-chain decoration lookups (used by the chain adapter). */
+
+/**
+ * Look up a batch's off-chain metadata.
+ * Checks the dynamic batch Map first (CSV-created batches), then falls back
+ * to the static seed array (demo seed batches).
+ */
 export function seedBatchById(batchId: number): SeedBatch | undefined {
-  return seedBatches[batchId - 1];
+  return _dynamicBatches.get(batchId) ?? seedBatches[batchId - 1];
 }
 
+/**
+ * Resolve cleartext amount for a wallet in a given batch.
+ * Dynamic batches: look up by wallet in the aligned wallets[] array.
+ * Static seed batches: fall back to employees[] index (original behavior).
+ */
 export function cleartextAmount(batchId: number, wallet: string): number {
   const seed = seedBatchById(batchId);
   if (!seed) return 0;
+  if (seed.wallets) {
+    const i = seed.wallets.indexOf(wallet);
+    return i >= 0 ? (seed.amounts[i] ?? 0) : 0;
+  }
+  // Legacy path: static seed batches keyed by employees[] index.
   const idx = employees.findIndex((e) => e.wallet === wallet);
   return idx >= 0 ? (seed.amounts[idx] ?? 0) : 0;
 }
 
+/**
+ * Resolve display name for a wallet.
+ * Priority: static members list → dynamic batch names → shortWallet fallback.
+ */
 export function memberName(wallet: string): string {
-  return members.find((m) => m.wallet === wallet)?.displayName ?? wallet;
+  const m = members.find((x) => x.wallet === wallet);
+  if (m) return m.displayName;
+
+  // Search dynamic batches for a CSV name attached to this wallet.
+  for (const batch of _dynamicBatches.values()) {
+    if (batch.wallets && batch.names) {
+      const i = batch.wallets.indexOf(wallet);
+      if (i >= 0 && batch.names[i]) return batch.names[i];
+    }
+  }
+
+  return shortWallet(wallet);
 }
 
 /** Mirrors compliance.can_access(grantee, batchId, payoutId). */

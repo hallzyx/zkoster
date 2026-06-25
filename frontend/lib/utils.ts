@@ -15,8 +15,10 @@ export function formatUsd(amount: number): string {
 
 // UI ↔ on-chain amount scaling. The UI works in scaled units; the contract and
 // token work in `ui / scale`. See AppConfig.displayScale.
+// On-chain amounts (and the prover's u64 inputs) are integers, so this floors —
+// mirroring scripts/pay_employee.sh's integer division `$(( UI_AMOUNT / SCALE ))`.
 export function toRealAmount(uiAmount: number, scale: number): number {
-  return uiAmount / scale;
+  return Math.floor(uiAmount / scale);
 }
 
 export function toUiAmount(realAmount: number, scale: number): number {

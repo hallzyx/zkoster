@@ -34,6 +34,7 @@ export interface AppConfig {
 }
 
 const DEFAULT_DISPLAY_SCALE = 1000;
+const DEFAULT_PROVER_URL = "http://127.0.0.1:8787";
 
 function readDisplayScale(): number {
   const raw = process.env.ZKOSTER_DISPLAY_SCALE;
@@ -79,7 +80,10 @@ export function getConfig(): AppConfig {
 
   return {
     dataSource,
-    proverUrl: process.env.ZKOSTER_PROVER_URL ?? null,
+    // Defaults to the local prover (matches scripts/pay_employee.sh's
+    // PROVER_URL default). 127.0.0.1 — not localhost — to avoid Node resolving
+    // to IPv6 ::1 while the prover binds IPv4 0.0.0.0.
+    proverUrl: process.env.ZKOSTER_PROVER_URL || DEFAULT_PROVER_URL,
     chain: dataSource === DATA_SOURCE.CHAIN ? readChainConfig() : null,
     displayScale: readDisplayScale(),
   };
