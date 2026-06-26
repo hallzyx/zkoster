@@ -1,8 +1,24 @@
-# Handoff — Confidential Settlement (hidden-amount transfers)
+# Handoff — ZKash (Confidential Settlement / hidden-amount payouts)
 
-> **Status:** Planned (SDD exploration complete, not started).
-> **Goal:** Hide each employee's payout **amount** on-chain during real settlement, so only the employee (with their key) and an authorized auditor (with a disclosure grant) can read it.
+> **Status:** PR1 (backend) DONE & merged to main; redeploy + PR2 (frontend) pending.
+> **Component name:** **ZKash** (ZK + cash) — flagship confidential-amount layer.
+> **Goal:** Hide each employee's payout **amount** on-chain, so only the employee (with their key) and an authorized auditor (with a disclosure grant + viewing key) can read it.
 > **SDD change name:** `confidential-settlement` · artifacts in Engram (see "Recovery" below).
+
+---
+
+## 0. Progress / Milestone (updated 2026-06-26)
+
+**PR1 — backend — DONE, committed `433c610`, pushed to main.** ✅
+- `prover/src/zkash.rs` — full ECIES module (encrypt + employee/auditor decrypt) over ark-bn254 (ChaCha20Poly1305 + SHA256 KDF). cargo round-trip + tamper tests pass.
+- Contracts extended: `Member.pub_key` (BytesN<64>), `Payout.enc_r`/`enc_amt` (BytesN<64>/BytesN<40>), `DisclosureGrant.viewing_key` (Option<BytesN<32>>); `register_member`/`add_payout`/`issue_grant` take the new args; `execute_payout` unchanged. **42 tests green, 3 WASM built.**
+- **🔑 Interop gate PASSED** (`scripts/zkash_interop.mjs`): a Rust-emitted fixed vector decrypts in Node via `@noble/curves` bn254 → `5000 == 5000` on both employee and auditor paths. **The #1 risk (Rust↔JS byte parity) is closed.**
+- Byte layout locked: G1 = `x‖y` BE 64B (no prefix); Fr = 32B BE; one ephemeral `r` per batch; nonce = row index LE; KDF = `SHA256(64B shared point)`; AEAD plaintext = amount u64 LE; `enc_amt` = nonce(12)‖ct(8)‖tag(16)‖zero(4).
+- **⚠️ noble gotcha for PR2:** `@noble/curves` bn254 has `fromBytes = notImplemented` for G1 — use `ProjectivePoint.fromAffine({x,y})` + `point.toAffine()` (NOT `fromHex` / `toRawBytes`).
+
+**PENDING:**
+- **T-07 — testnet redeploy** (schema changed → fresh deploy, no migration; **wipes the live demo state**). Use `scripts/deploy_testnet.sh` with the frontend admin as SOURCE so creator == owner == admin (see the script header + `EXPECTED_ADMIN` guard). Then update the 3 contract IDs in `frontend/.env.local` and re-seed.
+- **PR2 — frontend (T-08..T-16)** — stacked on PR1. `frontend/lib/zkash.ts` (TS mirror), chain.ts decode, chain-writes thread args + `Option<BytesN<32>>` ScVal, employee/auditor decrypt, admin flow. See `sdd/confidential-settlement/tasks` (#253) and `apply-progress` (#254).
 
 ---
 
