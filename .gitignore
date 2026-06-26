@@ -35,3 +35,11 @@ Thumbs.db
 
 # --- Local agent / tooling config ---
 .claude/settings.local.json
+.atl/
+
+# --- Session / tooling artifacts (Playwright, scratch scripts, screenshots) ---
+.playwright-mcp/
+**/_*.mjs
+admin.png
+batch1.png
+*.local.png
