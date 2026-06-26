@@ -20,6 +20,9 @@ struct Harness<'a> {
 fn zero64(e: &Env) -> BytesN<64> {
     BytesN::from_array(e, &[0u8; 64])
 }
+fn zero40(e: &Env) -> BytesN<40> {
+    BytesN::from_array(e, &[0u8; 40])
+}
 fn zero32(e: &Env) -> BytesN<32> {
     BytesN::from_array(e, &[0u8; 32])
 }
@@ -103,7 +106,8 @@ fn add_payout_rejects_unauthorized_employee() {
     let id = h.payroll.create_batch(&1_000, &2_000);
     let ghost = Address::generate(&h.e);
     assert_eq!(
-        h.payroll.try_add_payout(&id, &ghost, &zero64(&h.e)),
+        h.payroll
+            .try_add_payout(&id, &ghost, &zero64(&h.e), &zero64(&h.e), &zero40(&h.e)),
         Err(Ok(Error::EmployeeNotAuthorized))
     );
 }
@@ -112,10 +116,13 @@ fn add_payout_rejects_unauthorized_employee() {
 fn add_payout_for_authorized_employee_increments_count() {
     let h = setup();
     let emp = Address::generate(&h.e);
-    h.compliance.register_member(&emp, &MemberRole::Employee);
+    h.compliance
+        .register_member(&emp, &MemberRole::Employee, &zero64(&h.e));
 
     let id = h.payroll.create_batch(&1_000, &2_000);
-    let pid = h.payroll.add_payout(&id, &emp, &zero64(&h.e));
+    let pid = h
+        .payroll
+        .add_payout(&id, &emp, &zero64(&h.e), &zero64(&h.e), &zero40(&h.e));
     assert_eq!(pid, 1);
 
     let b = h.payroll.get_batch(&id).unwrap();
@@ -126,10 +133,40 @@ fn add_payout_for_authorized_employee_increments_count() {
 }
 
 #[test]
+fn add_payout_stores_ecies_fields() {
+    let h = setup();
+    let emp = Address::generate(&h.e);
+    h.compliance
+        .register_member(&emp, &MemberRole::Employee, &zero64(&h.e));
+
+    // Use non-zero sentinel bytes so we verify round-trip (not just zero-fill).
+    let mut r_bytes = [0u8; 64];
+    r_bytes[0] = 0xAB;
+    r_bytes[63] = 0xCD;
+    let enc_r = BytesN::from_array(&h.e, &r_bytes);
+
+    let mut a_bytes = [0u8; 40];
+    a_bytes[0] = 0x01;  // nonce byte
+    a_bytes[12] = 0x42; // ct byte
+    a_bytes[20] = 0xFF; // tag byte
+    let enc_amt = BytesN::from_array(&h.e, &a_bytes);
+
+    let id = h.payroll.create_batch(&1_000, &2_000);
+    let pid = h
+        .payroll
+        .add_payout(&id, &emp, &zero64(&h.e), &enc_r, &enc_amt);
+
+    let p = h.payroll.get_payout(&pid).unwrap();
+    assert_eq!(p.enc_r, enc_r, "enc_r must round-trip byte-for-byte");
+    assert_eq!(p.enc_amt, enc_amt, "enc_amt must round-trip byte-for-byte");
+}
+
+#[test]
 fn batch_count_and_employee_payout_index() {
     let h = setup();
     let emp = Address::generate(&h.e);
-    h.compliance.register_member(&emp, &MemberRole::Employee);
+    h.compliance
+        .register_member(&emp, &MemberRole::Employee, &zero64(&h.e));
 
     assert_eq!(h.payroll.batch_count(), 0);
 
@@ -137,8 +174,12 @@ fn batch_count_and_employee_payout_index() {
     let b2 = h.payroll.create_batch(&3, &4);
     assert_eq!(h.payroll.batch_count(), 2);
 
-    let p1 = h.payroll.add_payout(&b1, &emp, &zero64(&h.e));
-    let p2 = h.payroll.add_payout(&b2, &emp, &zero64(&h.e));
+    let p1 = h
+        .payroll
+        .add_payout(&b1, &emp, &zero64(&h.e), &zero64(&h.e), &zero40(&h.e));
+    let p2 = h
+        .payroll
+        .add_payout(&b2, &emp, &zero64(&h.e), &zero64(&h.e), &zero40(&h.e));
 
     let mine = h.payroll.get_employee_payouts(&emp);
     assert_eq!(mine.len(), 2);
@@ -174,9 +215,12 @@ fn approve_before_review_fails() {
 fn execute_before_funded_fails() {
     let h = setup();
     let emp = Address::generate(&h.e);
-    h.compliance.register_member(&emp, &MemberRole::Employee);
+    h.compliance
+        .register_member(&emp, &MemberRole::Employee, &zero64(&h.e));
     let id = h.payroll.create_batch(&1_000, &2_000);
-    let pid = h.payroll.add_payout(&id, &emp, &zero64(&h.e));
+    let pid = h
+        .payroll
+        .add_payout(&id, &emp, &zero64(&h.e), &zero64(&h.e), &zero40(&h.e));
 
     assert_eq!(
         h.payroll.try_execute_payout(
@@ -194,13 +238,16 @@ fn execute_before_funded_fails() {
 fn cannot_add_payout_after_review() {
     let h = setup();
     let emp = Address::generate(&h.e);
-    h.compliance.register_member(&emp, &MemberRole::Employee);
+    h.compliance
+        .register_member(&emp, &MemberRole::Employee, &zero64(&h.e));
     let id = h.payroll.create_batch(&1_000, &2_000);
-    h.payroll.add_payout(&id, &emp, &zero64(&h.e));
+    h.payroll
+        .add_payout(&id, &emp, &zero64(&h.e), &zero64(&h.e), &zero40(&h.e));
     h.payroll.review_batch(&id, &zero64(&h.e));
 
     assert_eq!(
-        h.payroll.try_add_payout(&id, &emp, &zero64(&h.e)),
+        h.payroll
+            .try_add_payout(&id, &emp, &zero64(&h.e), &zero64(&h.e), &zero40(&h.e)),
         Err(Ok(Error::InvalidBatchStatus))
     );
 }
@@ -212,12 +259,18 @@ fn full_payroll_flow_settles_batch() {
     let h = setup();
     let emp1 = Address::generate(&h.e);
     let emp2 = Address::generate(&h.e);
-    h.compliance.register_member(&emp1, &MemberRole::Employee);
-    h.compliance.register_member(&emp2, &MemberRole::Employee);
+    h.compliance
+        .register_member(&emp1, &MemberRole::Employee, &zero64(&h.e));
+    h.compliance
+        .register_member(&emp2, &MemberRole::Employee, &zero64(&h.e));
 
     let id = h.payroll.create_batch(&1_000, &2_000);
-    let p1 = h.payroll.add_payout(&id, &emp1, &zero64(&h.e));
-    let p2 = h.payroll.add_payout(&id, &emp2, &zero64(&h.e));
+    let p1 = h
+        .payroll
+        .add_payout(&id, &emp1, &zero64(&h.e), &zero64(&h.e), &zero40(&h.e));
+    let p2 = h
+        .payroll
+        .add_payout(&id, &emp2, &zero64(&h.e), &zero64(&h.e), &zero40(&h.e));
 
     h.payroll.review_batch(&id, &zero64(&h.e));
     h.payroll.approve_batch(&id);

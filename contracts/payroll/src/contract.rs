@@ -65,13 +65,20 @@ impl PayrollContract {
         Ok(batch_id)
     }
 
-    /// Add a payout (employee + amount commitment) to a draft batch.
+    /// Add a payout (employee + amount commitment + ZKash ciphertext) to a draft batch.
     /// Enforces recipient eligibility against the compliance contract.
+    ///
+    /// `enc_r` and `enc_amt` are the ZKash ECIES ciphertext fields produced by
+    /// the prover for each payout. They are stored alongside the Pedersen
+    /// commitment and ignored by `execute_payout` — they exist solely for the
+    /// employee and auditor portals to decrypt amounts client-side.
     pub fn add_payout(
         e: Env,
         batch_id: u64,
         employee: Address,
         amount_commitment: BytesN<64>,
+        enc_r: BytesN<64>,
+        enc_amt: BytesN<40>,
     ) -> Result<u64, Error> {
         let cfg = require_admin(&e)?;
         let mut batch = storage::get_batch(&e, batch_id).ok_or(Error::BatchNotFound)?;
@@ -93,6 +100,8 @@ impl PayrollContract {
             status: PayoutStatus::Pending,
             tx_ref: zero32(&e),
             receipt_ref: zero32(&e),
+            enc_r,
+            enc_amt,
         };
         storage::set_payout(&e, &payout);
         storage::add_batch_payout(&e, batch_id, payout_id);

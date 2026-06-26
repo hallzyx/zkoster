@@ -57,6 +57,13 @@ pub struct Batch {
 
 /// An individual payout. `amount_commitment` is the Pedersen commitment to
 /// the salary — the cleartext amount never touches the ledger.
+///
+/// `enc_r` and `enc_amt` are the ZKash ECIES-encrypted amount layer:
+///   - `enc_r`  : ephemeral BN254-G1 point R = eph·G (x‖y BE, 64B)
+///   - `enc_amt`: [0..12] nonce | [12..20] ct | [20..36] tag | [36..40] zeros
+///
+/// Both fields are read by the employee/auditor portals for client-side
+/// decryption. `execute_payout` ignores them entirely.
 #[contracttype]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Payout {
@@ -67,4 +74,8 @@ pub struct Payout {
     pub status: PayoutStatus,
     pub tx_ref: BytesN<32>,
     pub receipt_ref: BytesN<32>,
+    /// ZKash ECIES ephemeral point R = eph·G (x‖y BE, 64 bytes).
+    pub enc_r: BytesN<64>,
+    /// ZKash encrypted amount blob (40 bytes): nonce‖ct‖tag‖zeros.
+    pub enc_amt: BytesN<40>,
 }

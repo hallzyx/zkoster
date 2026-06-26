@@ -1,4 +1,4 @@
-use soroban_sdk::{contract, contractimpl, Address, Env, Vec};
+use soroban_sdk::{contract, contractimpl, Address, BytesN, Env, Vec};
 use zkoster_types::{DisclosureScope, MemberRole, MemberStatus};
 
 use crate::error::Error;
@@ -39,12 +39,22 @@ impl ComplianceContract {
     // --- Membership / allowlist -------------------------------------------
 
     /// Register (or re-register) a wallet as an authorized member.
-    pub fn register_member(e: Env, wallet: Address, role: MemberRole) -> Result<(), Error> {
+    ///
+    /// `pub_key` is the employee's uncompressed BN254-G1 ZKash public key
+    /// (x‖y big-endian, 64 bytes). Callers MUST supply a valid on-curve point;
+    /// the contract stores it as-is (no on-chain curve check required).
+    pub fn register_member(
+        e: Env,
+        wallet: Address,
+        role: MemberRole,
+        pub_key: BytesN<64>,
+    ) -> Result<(), Error> {
         require_admin(&e)?;
         let member = Member {
             wallet: wallet.clone(),
             role,
             status: MemberStatus::Authorized,
+            pub_key,
         };
         storage::set_member(&e, &member);
         MemberRegistered { wallet, role }.publish(&e);
@@ -96,6 +106,12 @@ impl ComplianceContract {
     ///
     /// `payout_id == 0` => whole-batch grant; non-zero => single payout.
     /// `expires_at == 0` => no expiry.
+    ///
+    /// `viewing_key` carries the ZKash ECIES ephemeral scalar (32B BE):
+    ///   - `None`     → TotalsOnly: auditor sees no per-payout amounts.
+    ///   - `Some(r)`  → Sample or FullBatch: auditor can decrypt enc_amt
+    ///                  for payouts in scope using `r` and each employee's
+    ///                  on-chain `pub_key`.
     pub fn issue_grant(
         e: Env,
         grantee: Address,
@@ -103,6 +119,7 @@ impl ComplianceContract {
         payout_id: u64,
         scope: DisclosureScope,
         expires_at: u64,
+        viewing_key: Option<BytesN<32>>,
     ) -> Result<u64, Error> {
         let admin = require_admin(&e)?;
 
@@ -126,6 +143,7 @@ impl ComplianceContract {
             granted_by: admin,
             expires_at,
             revoked: false,
+            viewing_key,
         };
         storage::set_grant(&e, &grant);
         storage::add_grantee_grant(&e, &grantee, grant_id);

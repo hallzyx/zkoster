@@ -15,6 +15,8 @@
 //! the on-chain verifier): G1 = `x‖y` BE (64B), G2 = `x.c1‖x.c0‖y.c1‖y.c0`
 //! EIP-197 (128B), Fr = 32B BE.
 
+pub mod zkash;
+
 use ark_bn254::{Bn254, Fq, Fq2, Fr, G1Affine, G2Affine};
 use ark_ec::{AffineRepr, CurveGroup};
 use ark_ff::{BigInteger, PrimeField, UniformRand};
@@ -96,21 +98,21 @@ fn commit(amount: Fr, blinding: Fr) -> G1Affine {
 
 // --- serialization (soroban-sdk BN254 layout) ---------------------------
 
-fn fq_be(f: &Fq) -> [u8; 32] {
+pub(crate) fn fq_be(f: &Fq) -> [u8; 32] {
     let mut out = [0u8; 32];
     let bytes = f.into_bigint().to_bytes_be();
     out[32 - bytes.len()..].copy_from_slice(&bytes);
     out
 }
 
-fn fr_be(f: &Fr) -> [u8; 32] {
+pub(crate) fn fr_be(f: &Fr) -> [u8; 32] {
     let mut out = [0u8; 32];
     let bytes = f.into_bigint().to_bytes_be();
     out[32 - bytes.len()..].copy_from_slice(&bytes);
     out
 }
 
-fn g1_bytes(p: &G1Affine) -> [u8; 64] {
+pub(crate) fn g1_bytes(p: &G1Affine) -> [u8; 64] {
     let mut out = [0u8; 64];
     out[..32].copy_from_slice(&fq_be(&p.x));
     out[32..].copy_from_slice(&fq_be(&p.y));
