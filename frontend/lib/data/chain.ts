@@ -41,6 +41,7 @@ import {
 import {
   cleartextAmount,
   company as companyMeta,
+  DEMO_AUDITOR_WALLET,
   members as membersMeta,
   memberName,
   seedBatchById,
@@ -283,6 +284,47 @@ export async function getEmployeePayouts(wallet: string): Promise<Payout[]> {
     ),
   );
   return payouts.sort((a, b) => b.batchId - a.batchId);
+}
+
+/**
+ * Admin-side read: ALL grants (including revoked) for a batch.
+ *
+ * LIMITATION: enumerated via a known grantee (default DEMO_AUDITOR_WALLET) because
+ * the compliance contract exposes no per-batch grant index — only
+ * get_grantee_grants(grantee) and get_grant(id). Grants issued to any OTHER grantee
+ * are NOT discoverable here. This is acceptable for the demo (grantee is hardcoded
+ * to the auditor wallet). Post-demo fix: add a per-batch grant index to the contract.
+ */
+export async function getBatchGrants(
+  batchId: number,
+  granteeWallet: string = DEMO_AUDITOR_WALLET,
+): Promise<Grant[]> {
+  const cfg = chainConfig();
+  const ids = await readContract<bigint[]>(cfg.complianceId, "get_grantee_grants", [
+    addr(granteeWallet),
+  ]);
+  const rawGrants = await Promise.all(
+    ids.map((gid) =>
+      readContract<RawGrant>(cfg.complianceId, "get_grant", [u64(Number(gid))]),
+    ),
+  );
+  // Unlike getGranteeGrants, we do NOT filter out revoked — the admin must see
+  // revoked grants to confirm state and avoid double-issuing.
+  return rawGrants
+    .filter((g) => Number(g.batch_id) === batchId)
+    .map((g) => ({
+      id: Number(g.grant_id),
+      batchId: Number(g.batch_id),
+      payoutId: Number(g.payout_id),
+      granteeWallet: g.grantee,
+      granteeName: memberName(g.grantee),
+      scope: resolveEnum(g.scope, SCOPE_BY_ID, SCOPE_BY_TAG, DISCLOSURE_SCOPE.TOTALS_ONLY),
+      expiresAt:
+        Number(g.expires_at) === 0
+          ? null
+          : new Date(Number(g.expires_at) * 1000).toISOString(),
+      revoked: g.revoked,
+    }));
 }
 
 export async function getGranteeGrants(wallet: string): Promise<Grant[]> {

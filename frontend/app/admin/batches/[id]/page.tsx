@@ -12,6 +12,7 @@ import { getBatch, getBatchPayouts } from "@/lib/data";
 import { PAYOUT_STATUS, ROLE } from "@/lib/types";
 import { formatPeriod, formatUsd, shortWallet } from "@/lib/utils";
 import { BatchActions } from "./_components/batch-actions";
+import { DisclosureGrantsPanel } from "./_components/disclosure-grants-panel";
 
 export const dynamic = "force-dynamic";
 
@@ -63,6 +64,8 @@ export default async function BatchDetail({
         </div>
 
         <BatchActions batchId={batch.id} status={batch.status} />
+
+        <DisclosureGrantsPanel batchId={batch.id} />
 
         <div className="mt-4 h-2 w-full overflow-hidden rounded-full bg-slate-800">
           <div

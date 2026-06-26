@@ -83,3 +83,16 @@ export async function getEmployeePayouts(wallet: string): Promise<Payout[]> {
 export async function getGranteeGrants(wallet: string): Promise<Grant[]> {
   return grants.filter((g) => g.granteeWallet === wallet && !g.revoked);
 }
+
+/**
+ * Admin-side read: all grants (including revoked) for a batch.
+ * The granteeWallet parameter is accepted for API parity with the chain adapter
+ * but is not used here — the mock knows all grants regardless of grantee.
+ */
+export async function getBatchGrants(
+  batchId: number,
+  granteeWallet?: string,
+): Promise<Grant[]> {
+  void granteeWallet; // mock knows all grants; chain adapter uses this to enumerate via grantee
+  return grants.filter((g) => g.batchId === batchId);
+}

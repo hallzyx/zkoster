@@ -27,7 +27,7 @@ import {
 } from "@stellar/stellar-sdk";
 
 import { getConfig, type ChainConfig } from "@/lib/config";
-import { ROLE, type Role } from "@/lib/types";
+import { DISCLOSURE_SCOPE, ROLE, type DisclosureScope, type Role } from "@/lib/types";
 import { roleKeypair } from "@/lib/wallets";
 import { proveBatch, type ProverProof, type ProverVk } from "@/lib/prover";
 import { toRealAmount } from "@/lib/utils";
@@ -433,4 +433,100 @@ export async function executePayouts(
   uiAmount: number,
 ): Promise<string[]> {
   return executePayoutsFromRows(batchId, [{ wallet: employeeWallet, uiAmount }]);
+}
+
+// ---------------------------------------------------------------------------
+// Disclosure grant writes
+// ---------------------------------------------------------------------------
+
+// Domain scope string → on-chain u32 discriminant (matches Rust enum order).
+// DisclosureScope: TotalsOnly=0, Sample=1, FullBatch=2 (shared/src/lib.rs).
+// Must use scvU32, NOT scvSymbol — same pattern as MemberRole (memberRoleEmployee).
+const SCOPE_TO_ID: Record<DisclosureScope, number> = {
+  [DISCLOSURE_SCOPE.TOTALS_ONLY]: 0,
+  [DISCLOSURE_SCOPE.SAMPLE]: 1,
+  [DISCLOSURE_SCOPE.FULL_BATCH]: 2,
+};
+
+const scvScope = (s: DisclosureScope): xdr.ScVal =>
+  xdr.ScVal.scvU32(SCOPE_TO_ID[s]);
+
+/**
+ * Issue a disclosure grant on the compliance contract.
+ *
+ * Returns the grant_id decoded from the contract's u64 return value — required
+ * by the caller (revokeGrant needs the id, and surfacing it in the UI is good UX).
+ *
+ * Uses the inline build/prepare/sign/submit/poll loop (same as createBatch) because
+ * the generic writeContract discards returnValue and we need the grant_id.
+ *
+ * IMPORTANT arg order (must match contract signature exactly):
+ *   issue_grant(grantee, batch_id, payout_id, scope, expires_at)
+ *
+ * TotalsOnly/FullBatch REQUIRE payout_id=0; Sample REQUIRES payout_id!=0.
+ * The demo form only offers TotalsOnly/FullBatch, so payoutId defaults to 0.
+ *
+ * Admin-signed: contract enforces require_admin. A wrong admin key → require_auth
+ * failure surfaced via humanize's "Secret key for role" branch.
+ */
+export async function issueGrant(
+  batchId: number,
+  scope: DisclosureScope,
+  opts: { grantee: string; payoutId?: number; expiresAt?: number },
+): Promise<{ grantId: number; txHash: string }> {
+  const cfg = chainConfig();
+  const server = new rpc.Server(cfg.rpcUrl);
+  const kp = roleKeypair(ROLE.ADMIN);
+
+  const account = await server.getAccount(kp.publicKey());
+  const tx = new TransactionBuilder(account, {
+    fee: BASE_FEE,
+    networkPassphrase: cfg.networkPassphrase,
+  })
+    .addOperation(
+      new Contract(cfg.complianceId).call(
+        "issue_grant",
+        addr(opts.grantee),
+        u64(batchId),
+        u64(opts.payoutId ?? 0),
+        scvScope(scope),
+        u64(opts.expiresAt ?? 0),
+      ),
+    )
+    .setTimeout(30)
+    .build();
+
+  const prepared = await server.prepareTransaction(tx);
+  prepared.sign(kp);
+  const sent = await server.sendTransaction(prepared);
+  if (sent.status === "ERROR") {
+    throw new Error(`issue_grant ERROR: ${sent.errorResult?.toXDR("base64") ?? "unknown"}`);
+  }
+
+  const hash = sent.hash;
+  for (let i = 0; i < MAX_POLLS; i++) {
+    await new Promise((r) => setTimeout(r, POLL_INTERVAL_MS));
+    const result = await server.getTransaction(hash);
+    if (result.status === rpc.Api.GetTransactionStatus.SUCCESS) {
+      const grantId =
+        "returnValue" in result && result.returnValue
+          ? Number(scValToNative(result.returnValue) as bigint)
+          : 0;
+      return { grantId, txHash: hash };
+    }
+    if (result.status === rpc.Api.GetTransactionStatus.FAILED) {
+      throw new Error(`issue_grant FAILED (hash: ${hash})`);
+    }
+  }
+  throw new Error(`issue_grant timed out (hash: ${hash})`);
+}
+
+/**
+ * Revoke a disclosure grant by id.
+ * Admin-signed (contract enforces require_admin).
+ * Returns the confirmed tx hash.
+ */
+export async function revokeGrant(grantId: number): Promise<string> {
+  const cfg = chainConfig();
+  return writeContract(cfg.complianceId, "revoke_grant", [u64(grantId)]);
 }

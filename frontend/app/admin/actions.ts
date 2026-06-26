@@ -3,18 +3,21 @@
 import { StrKey } from "@stellar/stellar-sdk";
 
 import { getBatch } from "@/lib/data";
-import { BATCH_STATUS, PAYOUT_STATUS, type BatchStatus } from "@/lib/types";
+import { BATCH_STATUS, DISCLOSURE_SCOPE, PAYOUT_STATUS, type BatchStatus, type DisclosureScope } from "@/lib/types";
 import { roleWallet } from "@/lib/wallets";
 import {
   approveBatch as chainApproveBatch,
   createBatch as chainCreateBatch,
   executePayoutsFromRows as chainExecutePayoutsFromRows,
   fundBatch as chainFundBatch,
+  issueGrant as chainIssueGrant,
   reviewBatch as chainReviewBatch,
   reviewBatchFromRows as chainReviewBatchFromRows,
+  revokeGrant as chainRevokeGrant,
   type BatchRow,
 } from "@/lib/data/chain-writes";
 import {
+  DEMO_AUDITOR_WALLET,
   registerDynamicBatch,
   seedBatchById,
   DEMO_EMPLOYEE_WALLET,
@@ -54,6 +57,12 @@ function humanize(err: unknown, step?: string): { error: string; step?: string }
       "Invalid ZK proof — the range proof was rejected by the verifier. Re-prove and retry.",
     VkNotSet:
       "Verifying key not set — run the Review step first to upload the VK to the verifier contract.",
+    InvalidGrantTarget:
+      "Invalid grant target — scope/payout mismatch. Totals Only and Full Batch grants must target the whole batch (payout_id=0).",
+    InvalidExpiry:
+      "Invalid expiry — the expiry time is already in the past.",
+    GrantNotFound:
+      "Grant not found — it may have been removed. Refresh and try again.",
   };
 
   for (const [keyword, friendly] of Object.entries(known)) {
@@ -331,6 +340,57 @@ export async function createBatchWithRowsAction(
     return { ok: true, txHash, batchId, status: BATCH_STATUS.REVIEWED };
   } catch (err) {
     return { ok: false, ...humanize(err, "create-batch") };
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Disclosure grant actions
+// ---------------------------------------------------------------------------
+
+export type IssueGrantResult = ActionResult & { grantId?: number };
+
+/**
+ * Issue a disclosure grant to the demo auditor wallet for a batch.
+ *
+ * Demo policy:
+ *   - grantee: DEMO_AUDITOR_WALLET (hardcoded — single auditor in the demo)
+ *   - payoutId: 0 (whole-batch grant; required by on-chain rule for non-Sample scope)
+ *   - expiresAt: 0 (no expiry)
+ *   - scope: TotalsOnly | FullBatch only (Sample excluded — requires payoutId!=0)
+ *
+ * Returns grantId on success so the UI can surface it immediately.
+ */
+export async function issueGrantAction(
+  batchId: number,
+  scope: DisclosureScope,
+): Promise<IssueGrantResult> {
+  try {
+    // Guard: Sample scope requires payoutId!=0; this form only issues whole-batch grants.
+    if (scope === DISCLOSURE_SCOPE.SAMPLE) {
+      return {
+        ok: false,
+        error: "Sample scope is not supported in this form — it requires a specific payout target.",
+        step: "precondition",
+      };
+    }
+    const { grantId, txHash } = await chainIssueGrant(batchId, scope, {
+      grantee: DEMO_AUDITOR_WALLET,
+    });
+    return { ok: true, txHash, grantId };
+  } catch (err) {
+    return { ok: false, ...humanize(err, "issue-grant") };
+  }
+}
+
+/**
+ * Revoke a disclosure grant by id. Admin-signed.
+ */
+export async function revokeGrantAction(grantId: number): Promise<ActionResult> {
+  try {
+    const txHash = await chainRevokeGrant(grantId);
+    return { ok: true, txHash };
+  } catch (err) {
+    return { ok: false, ...humanize(err, "revoke-grant") };
   }
 }
 

@@ -51,3 +51,10 @@ export async function getEmployeePayouts(wallet: string): Promise<Payout[]> {
 export async function getGranteeGrants(wallet: string): Promise<Grant[]> {
   return (await adapter()).getGranteeGrants(wallet);
 }
+
+export async function getBatchGrants(
+  batchId: number,
+  granteeWallet?: string,
+): Promise<Grant[]> {
+  return (await adapter()).getBatchGrants(batchId, granteeWallet);
+}
