@@ -37,14 +37,27 @@ pub struct DepositResponse {
     pub proof_scval_xdr_b64: String,
     /// Base64 XDR of the pool `ExtData` ScVal (transact arg 1).
     pub ext_data_scval_xdr_b64: String,
-    /// Hex representation of output_commitment0.
+    /// Hex representation of output_commitment0 (BE).
     pub output_commitment0: String,
-    /// Hex representation of output_commitment1.
+    /// Hex representation of output_commitment1 (BE).
     pub output_commitment1: String,
-    /// Hex representation of input_nullifier0.
+    /// Hex representation of input_nullifier0 (BE).
     pub input_nullifier0: String,
-    /// Hex representation of input_nullifier1.
+    /// Hex representation of input_nullifier1 (BE).
     pub input_nullifier1: String,
+    /// Note data required for the employee to claim this deposit.
+    pub note: DepositNoteData,
+}
+
+/// Claim data the recipient needs to withdraw the deposited note.
+#[derive(Debug, Serialize)]
+pub struct DepositNoteData {
+    /// Amount in stroops.
+    pub amount_stroops: u64,
+    /// Note blinding (LE hex 32B) — keep secret.
+    pub blinding_le_hex: String,
+    /// Commitment hash (BE hex 32B) — use to find the leaf in pool events.
+    pub commitment_be_hex: String,
 }
 
 pub async fn handler(
@@ -121,16 +134,39 @@ async fn generate_deposit_proof(
         smt_depth: ASP_SMT_DEPTH,
     };
 
-    let result = tokio::task::spawn_blocking(move || run_proof_pipeline(state2, params))
-        .await
-        .map_err(|e| anyhow::anyhow!("thread panicked: {e:?}"))??;
+    let amount_stroops = req.amount_stroops;
+    let result = tokio::task::spawn_blocking(move || {
+        run_proof_pipeline(state2, params, amount_stroops, out_blinding)
+    })
+    .await
+    .map_err(|e| anyhow::anyhow!("thread panicked: {e:?}"))??;
 
     Ok(result)
+}
+
+pub(crate) fn parse_field_be_hex(s: &str, name: &str) -> anyhow::Result<Field> {
+    let s = s.strip_prefix("0x").unwrap_or(s);
+    let bytes = hex::decode(s).map_err(|e| anyhow::anyhow!("{name}: invalid hex: {e}"))?;
+    if bytes.len() != 32 {
+        return Err(anyhow::anyhow!("{name}: expected 32 bytes, got {}", bytes.len()));
+    }
+    let be: [u8; 32] = bytes.try_into().expect("checked len");
+    let mut le = be;
+    le.reverse();
+    Field::try_from_le_bytes(le).map_err(|e| anyhow::anyhow!("{name}: {e}"))
+}
+
+pub(crate) fn base64_xdr(val: &stellar_xdr::curr::ScVal) -> anyhow::Result<String> {
+    use base64::{Engine as _, engine::general_purpose::STANDARD};
+    let bytes = val.to_xdr(Limits::none())?;
+    Ok(STANDARD.encode(&bytes))
 }
 
 fn run_proof_pipeline(
     state: SharedState,
     params: DepositParams,
+    amount_stroops: u64,
+    out_blinding: Field,
 ) -> anyhow::Result<DepositResponse> {
     // Build circuit inputs via flows::deposit.
     let artifacts = deposit(params, |ext| hash_ext_data(ext))?;
@@ -166,27 +202,21 @@ fn run_proof_pipeline(
     let ext_b64 = base64_xdr(&ext_scval)?;
 
     let field_hex = |f: Field| hex::encode(f.to_be_bytes());
+    let commitment0 = prepared.output_commitments[0];
 
     Ok(DepositResponse {
         proof_scval_xdr_b64: proof_b64,
         ext_data_scval_xdr_b64: ext_b64,
-        output_commitment0: field_hex(prepared.output_commitments[0]),
+        output_commitment0: field_hex(commitment0),
         output_commitment1: field_hex(prepared.output_commitments[1]),
         input_nullifier0: field_hex(prepared.input_nullifiers[0]),
         input_nullifier1: field_hex(prepared.input_nullifiers[1]),
+        note: DepositNoteData {
+            amount_stroops,
+            blinding_le_hex: hex::encode(out_blinding.to_le_bytes()),
+            commitment_be_hex: field_hex(commitment0),
+        },
     })
-}
-
-fn parse_field_be_hex(s: &str, name: &str) -> anyhow::Result<Field> {
-    let s = s.strip_prefix("0x").unwrap_or(s);
-    let bytes = hex::decode(s).map_err(|e| anyhow::anyhow!("{name}: invalid hex: {e}"))?;
-    if bytes.len() != 32 {
-        return Err(anyhow::anyhow!("{name}: expected 32 bytes, got {}", bytes.len()));
-    }
-    let be: [u8; 32] = bytes.try_into().expect("checked len");
-    let mut le = be;
-    le.reverse();
-    Field::try_from_le_bytes(le).map_err(|e| anyhow::anyhow!("{name}: {e}"))
 }
 
 fn parse_recipient_keys(
@@ -230,10 +260,4 @@ fn parse_recipient_keys(
     };
 
     Ok((note_pubkey, enc_pubkey))
-}
-
-fn base64_xdr(val: &stellar_xdr::curr::ScVal) -> anyhow::Result<String> {
-    use base64::{Engine as _, engine::general_purpose::STANDARD};
-    let bytes = val.to_xdr(Limits::none())?;
-    Ok(STANDARD.encode(&bytes))
 }

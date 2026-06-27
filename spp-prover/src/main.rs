@@ -45,6 +45,8 @@ async fn main() -> anyhow::Result<()> {
         .route("/health", get(routes::health::handler))
         .route("/spp/membership", get(routes::membership::handler))
         .route("/spp/deposit", post(routes::deposit::handler))
+        .route("/spp/withdraw", post(routes::withdraw::handler))
+        .route("/spp/pool-root", post(routes::pool_root::handler))
         .with_state(state);
 
     let addr = format!("127.0.0.1:{}", args.port);

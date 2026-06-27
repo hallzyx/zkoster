@@ -25,6 +25,8 @@ const MEMBERSHIP_BLINDING: [u8; 32] = [
 
 pub const ASP_TREE_DEPTH: u32 = 10;
 pub const ASP_SMT_DEPTH: u32 = 10;
+/// Depth of the pool's incremental Merkle tree (same as circuit param).
+pub const POOL_TREE_DEPTH: u32 = 10;
 
 /// Computed membership state for the demo identity.
 pub struct MembershipState {
