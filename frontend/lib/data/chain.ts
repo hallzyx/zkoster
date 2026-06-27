@@ -176,6 +176,8 @@ interface RawBatch {
   created_by: string;
   approved_by: string | null;
   settlement_ref: unknown;
+  /** Option<BytesN<32>>: scValToNative decodes Some(bytes) as Buffer/Uint8Array, None as undefined. */
+  spp_deposit_ref: unknown;
 }
 interface RawPayout {
   payout_id: bigint;
@@ -198,6 +200,14 @@ interface RawGrant {
 function decorateBatch(raw: RawBatch): Batch {
   const id = Number(raw.batch_id);
   const meta = seedBatchById(id);
+
+  // Decode Option<BytesN<32>>: scValToNative returns Buffer/Uint8Array for Some,
+  // undefined or null for None. Convert to hex string for the frontend.
+  let sppDepositRef: string | null = null;
+  if (raw.spp_deposit_ref instanceof Uint8Array || Buffer.isBuffer(raw.spp_deposit_ref)) {
+    sppDepositRef = Buffer.from(raw.spp_deposit_ref as Uint8Array).toString("hex");
+  }
+
   return {
     id,
     name: meta?.name ?? `Batch #${id}`,
@@ -215,6 +225,7 @@ function decorateBatch(raw: RawBatch): Batch {
     totalAmount: meta?.amounts.reduce((a, b) => a + b, 0) ?? 0,
     employeeCount: raw.employee_count,
     settlementRef: meta?.settlementRef ?? null,
+    sppDepositRef,
   };
 }
 

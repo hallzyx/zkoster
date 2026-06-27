@@ -28,6 +28,11 @@ pub enum PayoutStatus {
 }
 
 /// One company workspace's wiring and treasury config.
+///
+/// MIGRATION NOTE: The `spp_pool` field was added as part of the SPP bridge
+/// (spp-transfer change). Any previously stored `Config` value (before this
+/// change) will fail to deserialize — Soroban does NOT auto-default new fields
+/// for existing on-chain data. A fresh redeploy + `initialize` is required (T-05).
 #[contracttype]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Config {
@@ -37,10 +42,18 @@ pub struct Config {
     pub asset: Address,
     pub compliance: Address,
     pub verifier: Address,
+    /// Optional address of the Stellar Private Payments pool used for this
+    /// workspace. Set via `set_spp_pool`; `None` until explicitly configured.
+    pub spp_pool: Option<Address>,
 }
 
 /// A payroll batch. `total_commitment` is the Pedersen commitment to the
 /// batch total — the cleartext total never touches the ledger.
+///
+/// MIGRATION NOTE: The `spp_deposit_ref` field was added as part of the SPP
+/// bridge (spp-transfer change). Any previously stored `Batch` value will fail
+/// to deserialize — `Option<_>` does NOT auto-default for existing on-chain
+/// storage in Soroban. A fresh redeploy is required (T-05).
 #[contracttype]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Batch {
@@ -53,6 +66,10 @@ pub struct Batch {
     pub created_by: Address,
     pub approved_by: Option<Address>,
     pub settlement_ref: BytesN<32>,
+    /// Optional 32-byte reference to the Stellar Private Payments deposit for
+    /// this batch. Set via `record_spp_deposit` after the treasury transfers
+    /// the pooled amount to the SPP pool contract. `None` until recorded.
+    pub spp_deposit_ref: Option<BytesN<32>>,
 }
 
 /// An individual payout. `amount_commitment` is the Pedersen commitment to

@@ -72,6 +72,8 @@ export interface Batch {
   totalAmount: number;
   employeeCount: number;
   settlementRef: string | null;
+  /** Hex-encoded 32-byte SPP deposit reference anchored on-chain, or null if no deposit yet. */
+  sppDepositRef: string | null;
 }
 
 export interface Payout {

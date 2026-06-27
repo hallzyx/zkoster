@@ -307,3 +307,129 @@ fn full_payroll_flow_settles_batch() {
         .execute_payout(&id, &p2, &dummy_proof(&h.e), &empty_inputs, &zero32(&h.e));
     assert_eq!(h.payroll.get_batch(&id).unwrap().status, BatchStatus::Paid);
 }
+
+// --- T-04: set_spp_pool + record_spp_deposit tests -----------------------
+
+/// Returns a batch_id in Funded status (create → add_payout → review → approve → fund).
+fn funded_batch(h: &Harness) -> u64 {
+    let emp = Address::generate(&h.e);
+    h.compliance
+        .register_member(&emp, &MemberRole::Employee, &zero64(&h.e));
+    let id = h.payroll.create_batch(&1_000, &2_000);
+    h.payroll
+        .add_payout(&id, &emp, &zero64(&h.e), &zero64(&h.e), &zero40(&h.e));
+    h.payroll.review_batch(&id, &zero64(&h.e));
+    h.payroll.approve_batch(&id);
+    h.payroll.fund_batch(&id);
+    id
+}
+
+#[test]
+fn set_spp_pool_stores_address() {
+    let h = setup();
+    let pool = Address::generate(&h.e);
+
+    h.payroll.set_spp_pool(&pool);
+
+    let cfg = h.payroll.config();
+    assert_eq!(cfg.spp_pool, Some(pool), "spp_pool must round-trip through Config");
+}
+
+/// Calling `set_spp_pool` without providing admin auth must panic (host trap).
+/// We use a fresh Env without mock_all_auths so require_auth() is enforced.
+/// `initialize` itself has no require_auth call, so it bootstraps cleanly.
+#[test]
+#[should_panic]
+fn set_spp_pool_non_admin_panics() {
+    let e = Env::default();
+    // Intentionally NO e.mock_all_auths() — auth enforcement is live.
+    let admin = Address::generate(&e);
+    let treasury = Address::generate(&e);
+    let asset = Address::generate(&e);
+    // Dummy addresses: set_spp_pool never calls into these contracts.
+    let compliance_dummy = Address::generate(&e);
+    let verifier_dummy = Address::generate(&e);
+    let pool = Address::generate(&e);
+
+    let payroll_id = e.register(PayrollContract, ());
+    let payroll = PayrollContractClient::new(&e, &payroll_id);
+    // initialize has no require_auth — succeeds without mocking.
+    payroll.initialize(&admin, &treasury, &asset, &compliance_dummy, &verifier_dummy);
+
+    // require_auth() is NOT satisfied → host trap → test must panic.
+    payroll.set_spp_pool(&pool);
+}
+
+#[test]
+fn record_spp_deposit_happy_path() {
+    let h = setup();
+    let batch_id = funded_batch(&h);
+    let spp_ref = BytesN::from_array(&h.e, &[0xAB; 32]);
+
+    h.payroll.record_spp_deposit(&batch_id, &spp_ref);
+
+    let batch = h.payroll.get_batch(&batch_id).unwrap();
+    assert_eq!(
+        batch.spp_deposit_ref,
+        Some(spp_ref),
+        "spp_deposit_ref must be stored on the batch"
+    );
+    // Status must remain Funded — record_spp_deposit is a side annotation, not a transition.
+    assert_eq!(
+        batch.status,
+        BatchStatus::Funded,
+        "batch status must stay Funded after recording the SPP ref"
+    );
+}
+
+#[test]
+fn record_spp_deposit_wrong_status_fails() {
+    let h = setup();
+    // Draft batch — not Funded or Processing.
+    let id = h.payroll.create_batch(&1_000, &2_000);
+    let spp_ref = BytesN::from_array(&h.e, &[0x01; 32]);
+
+    assert_eq!(
+        h.payroll.try_record_spp_deposit(&id, &spp_ref),
+        Err(Ok(crate::error::Error::InvalidBatchStatus)),
+        "record_spp_deposit must reject batches not in Funded/Processing status"
+    );
+}
+
+#[test]
+fn record_spp_deposit_already_set_fails() {
+    let h = setup();
+    let batch_id = funded_batch(&h);
+    let spp_ref = BytesN::from_array(&h.e, &[0xBB; 32]);
+
+    h.payroll.record_spp_deposit(&batch_id, &spp_ref);
+
+    // Second call with a different ref must be rejected to keep the anchor tamper-evident.
+    let other_ref = BytesN::from_array(&h.e, &[0xCC; 32]);
+    assert_eq!(
+        h.payroll.try_record_spp_deposit(&batch_id, &other_ref),
+        Err(Ok(crate::error::Error::SppDepositAlreadyRecorded)),
+        "second record_spp_deposit call must be rejected"
+    );
+}
+
+/// Calling `record_spp_deposit` without admin auth must panic (host trap).
+#[test]
+#[should_panic]
+fn record_spp_deposit_non_admin_panics() {
+    let e = Env::default();
+    // Intentionally NO e.mock_all_auths() — auth enforcement is live.
+    let admin = Address::generate(&e);
+    let treasury = Address::generate(&e);
+    let asset = Address::generate(&e);
+    let compliance_dummy = Address::generate(&e);
+    let verifier_dummy = Address::generate(&e);
+
+    let payroll_id = e.register(PayrollContract, ());
+    let payroll = PayrollContractClient::new(&e, &payroll_id);
+    payroll.initialize(&admin, &treasury, &asset, &compliance_dummy, &verifier_dummy);
+
+    let spp_ref = BytesN::from_array(&e, &[0x01; 32]);
+    // require_auth() is NOT satisfied → host trap → test must panic.
+    payroll.record_spp_deposit(&1u64, &spp_ref);
+}

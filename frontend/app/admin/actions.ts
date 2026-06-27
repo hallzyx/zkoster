@@ -3,19 +3,22 @@
 import { StrKey } from "@stellar/stellar-sdk";
 
 import { getBatch } from "@/lib/data";
-import { BATCH_STATUS, DISCLOSURE_SCOPE, PAYOUT_STATUS, type BatchStatus, type DisclosureScope } from "@/lib/types";
-import { roleWallet } from "@/lib/wallets";
+import { BATCH_STATUS, DISCLOSURE_SCOPE, PAYOUT_STATUS, ROLE, type BatchStatus, type DisclosureScope } from "@/lib/types";
+import { roleKeypair, roleWallet } from "@/lib/wallets";
 import {
   approveBatch as chainApproveBatch,
   createBatch as chainCreateBatch,
   executePayoutsFromRows as chainExecutePayoutsFromRows,
   fundBatch as chainFundBatch,
   issueGrant as chainIssueGrant,
+  recordSppDeposit as chainRecordSppDeposit,
   reviewBatch as chainReviewBatch,
   reviewBatchFromRows as chainReviewBatchFromRows,
   revokeGrant as chainRevokeGrant,
   type BatchRow,
 } from "@/lib/data/chain-writes";
+import { generateDemoNote, hashNote } from "@/lib/spp/notes";
+import { depositToPool } from "@/lib/spp/pool-client";
 import {
   DEMO_AUDITOR_WALLET,
   registerDynamicBatch,
@@ -63,6 +66,10 @@ function humanize(err: unknown, step?: string): { error: string; step?: string }
       "Invalid expiry — the expiry time is already in the past.",
     GrantNotFound:
       "Grant not found — it may have been removed. Refresh and try again.",
+    SppDepositAlreadyRecorded:
+      "SPP deposit already recorded — this batch already has a privacy pool deposit reference.",
+    SppPoolNotSet:
+      "SPP pool address not set — call set_spp_pool first to register the pool contract.",
   };
 
   for (const [keyword, friendly] of Object.entries(known)) {
@@ -193,6 +200,76 @@ export async function fundBatchAction(batchId: number): Promise<ActionResult> {
     return { ok: true, txHash, status: BATCH_STATUS.FUNDED };
   } catch (err) {
     return { ok: false, ...humanize(err, "fund") };
+  }
+}
+
+// Result type for the SPP deposit action (extends ActionResult with sppRef).
+export type SppDepositActionResult =
+  | { ok: true; txHash: string; sppRef: string }
+  | { ok: false; error: string; step?: string };
+
+/**
+ * Deposit the batch total into the SPP privacy pool and anchor the reference on-chain.
+ *
+ * Server-side orchestration:
+ *   1. Generate a demo SPP note for the total amount.
+ *   2. Attempt depositToPool (admin signs). DEMO: the on-chain verifier rejects
+ *      the placeholder proof — we catch the expected [DEMO] error and fall back
+ *      to a deterministic demo txHash so the full data flow is exercised.
+ *   3. Derive sppRef = hashNote(note) — a stable 32-byte identifier.
+ *   4. Call record_spp_deposit on-chain to anchor the reference (tamper-evident).
+ *
+ * Runs server-side (admin keypair stays on the server; pool-client.ts uses
+ * Node.js `crypto` via notes.ts so it cannot run in the browser).
+ */
+export async function depositToPrivacyPoolAction(
+  batchId: number,
+  totalAmount: number,
+): Promise<SppDepositActionResult> {
+  try {
+    const batch = await getBatch(batchId);
+    if (!batch) return { ok: false, error: `Batch ${batchId} not found.` };
+    if (batch.status !== BATCH_STATUS.FUNDED) {
+      return {
+        ok: false,
+        error: `Batch is not Funded (current: ${batch.status}). Refresh and try again.`,
+        step: "precondition",
+      };
+    }
+    if (batch.sppDepositRef !== null) {
+      return {
+        ok: false,
+        error: "SPP deposit already recorded for this batch.",
+        step: "precondition",
+      };
+    }
+
+    const kp = roleKeypair(ROLE.ADMIN);
+    const amount = BigInt(totalAmount);
+
+    // Generate the demo note first so we always have a sppRef regardless of pool result.
+    const note = generateDemoNote(amount, kp.publicKey());
+    const sppRef = hashNote(note);
+
+    // Attempt the real pool transact — the demo placeholder proof will be rejected,
+    // so we catch the expected [DEMO] error and fall back to a derived txHash.
+    let txHash = `demo:spp:${sppRef.slice(0, 16)}`;
+    try {
+      const result = await depositToPool(amount, kp.publicKey(), kp);
+      txHash = result.txHash;
+    } catch (poolErr) {
+      const msg = poolErr instanceof Error ? poolErr.message : String(poolErr);
+      // Only swallow the expected demo proof-rejection error; re-throw anything else.
+      if (!msg.includes("[DEMO]")) throw poolErr;
+      // txHash remains the derived demo value.
+    }
+
+    // Anchor the reference on-chain (idempotency guard in the contract).
+    await chainRecordSppDeposit(batchId, sppRef);
+
+    return { ok: true, txHash, sppRef };
+  } catch (err) {
+    return { ok: false, ...humanize(err, "spp-deposit") };
   }
 }
 

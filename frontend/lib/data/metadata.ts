@@ -51,6 +51,8 @@ export interface SeedBatch {
   periodEnd: string;
   status: BatchStatus;
   settlementRef: string | null;
+  /** Hex-encoded BytesN<32> from record_spp_deposit. Set when the batch has been deposited into the SPP privacy pool. */
+  sppDepositRef?: string | null;
   amounts: number[];
   statuses: PayoutStatus[];
   /**
@@ -104,6 +106,8 @@ export const seedBatches: SeedBatch[] = [
     periodEnd: "2026-03-31",
     status: BATCH_STATUS.CLOSED,
     settlementRef: "stellar:tx:9f2a…c41",
+    // Demo SPP deposit ref: a real deployment would write this via record_spp_deposit().
+    sppDepositRef: "a3f8c2e14b7d905e6f2a18c4d3b7e9f02a1c5d8e4b6f0a2e1c3d5b7f9a2c4e6",
     amounts: [7800, 6200, 9100, 5400, 8300, 6700],
     statuses: Array(6).fill(PAYOUT_STATUS.PAID) as PayoutStatus[],
   },

@@ -3,7 +3,7 @@ use zkoster_types::Proof;
 
 use crate::clients::{ComplianceClient, VerifierClient};
 use crate::error::Error;
-use crate::events::{BatchApproved, BatchCreated, PayoutPaid};
+use crate::events::{BatchApproved, BatchCreated, PayoutPaid, SppDepositRecorded};
 use crate::storage;
 use crate::types::{Batch, BatchStatus, Config, Payout, PayoutStatus};
 
@@ -33,6 +33,8 @@ impl PayrollContract {
                 asset,
                 compliance,
                 verifier,
+                // SPP pool address is set later via set_spp_pool; not known at init time.
+                spp_pool: None,
             },
         );
         storage::bump_instance(&e);
@@ -59,6 +61,8 @@ impl PayrollContract {
             created_by: cfg.admin,
             approved_by: None,
             settlement_ref: zero32(&e),
+            // SPP deposit reference is recorded later via record_spp_deposit.
+            spp_deposit_ref: None,
         };
         storage::set_batch(&e, &batch);
         BatchCreated { batch_id }.publish(&e);
@@ -261,6 +265,57 @@ impl PayrollContract {
         }
         batch.status = BatchStatus::Closed;
         storage::set_batch(&e, &batch);
+        Ok(())
+    }
+
+    // --- SPP bridge admin functions ---------------------------------------
+
+    /// Store the Stellar Private Payments pool address in the workspace config.
+    ///
+    /// Call this once after deploying (or locating) the SPP pool contract on
+    /// testnet. The address is used by the frontend to build pool.transact()
+    /// transactions; the payroll contract itself never calls into SPP at runtime
+    /// (ADR-1: anchor, don't integrate).
+    ///
+    /// Admin-only. Can be updated (no idempotency guard here — only the deposit
+    /// ref is tamper-evident).
+    pub fn set_spp_pool(e: Env, pool: Address) -> Result<(), Error> {
+        let mut cfg = require_admin(&e)?;
+        cfg.spp_pool = Some(pool);
+        storage::set_config(&e, &cfg);
+        Ok(())
+    }
+
+    /// Record the SPP deposit reference for a funded batch.
+    ///
+    /// After the admin deposits the pooled total into the SPP privacy pool
+    /// (off-chain browser flow), this function anchors the resulting 32-byte
+    /// commitment hash (`spp_ref`) onto the batch. This creates a tamper-evident
+    /// link between the on-chain batch and the off-chain SPP deposit.
+    ///
+    /// Constraints:
+    /// - Batch must be in `Funded` or `Processing` status (deposit happens after
+    ///   `fund_batch`, optionally interleaved with `execute_payout` calls).
+    /// - Once set, the ref cannot be overwritten (`SppDepositAlreadyRecorded`).
+    /// - Does not change batch status — it is a side annotation.
+    ///
+    /// Admin-only.
+    pub fn record_spp_deposit(
+        e: Env,
+        batch_id: u64,
+        spp_ref: BytesN<32>,
+    ) -> Result<(), Error> {
+        require_admin(&e)?;
+        let mut batch = storage::get_batch(&e, batch_id).ok_or(Error::BatchNotFound)?;
+        if batch.status != BatchStatus::Funded && batch.status != BatchStatus::Processing {
+            return Err(Error::InvalidBatchStatus);
+        }
+        if batch.spp_deposit_ref.is_some() {
+            return Err(Error::SppDepositAlreadyRecorded);
+        }
+        batch.spp_deposit_ref = Some(spp_ref.clone());
+        storage::set_batch(&e, &batch);
+        SppDepositRecorded { batch_id, spp_ref }.publish(&e);
         Ok(())
     }
 

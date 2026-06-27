@@ -119,6 +119,20 @@ function publicInputsVec(publicInput: string): xdr.ScVal {
 /** Zero tx_ref: BytesN<32> of all zeros. */
 const zeroTxRef: xdr.ScVal = xdr.ScVal.scvBytes(Buffer.alloc(32));
 
+/**
+ * Zero enc_r: BytesN<64> of all zeros.
+ * Placeholder passed to add_payout until the prover emits ECIES fields.
+ * The contract stores it for employee/auditor decryption — zero means
+ * no encrypted amount disclosure for this payout (acceptable for hackathon).
+ */
+const zeroEncR: xdr.ScVal = xdr.ScVal.scvBytes(Buffer.alloc(64));
+
+/**
+ * Zero enc_amt: BytesN<40> of all zeros.
+ * Placeholder paired with zeroEncR above (same lifecycle and constraints).
+ */
+const zeroEncAmt: xdr.ScVal = xdr.ScVal.scvBytes(Buffer.alloc(40));
+
 // ---------------------------------------------------------------------------
 // Core write primitive
 // ---------------------------------------------------------------------------
@@ -305,6 +319,8 @@ export async function reviewBatchFromRows(
         u64(batchId),
         addr(rows[i].wallet),
         bytesHex(proved.payouts[i].commitment),
+        zeroEncR,   // enc_r: prover does not emit ECIES fields yet; zero placeholder
+        zeroEncAmt, // enc_amt: same — zero placeholder
       ]);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -529,4 +545,54 @@ export async function issueGrant(
 export async function revokeGrant(grantId: number): Promise<string> {
   const cfg = chainConfig();
   return writeContract(cfg.complianceId, "revoke_grant", [u64(grantId)]);
+}
+
+// ---------------------------------------------------------------------------
+// SPP anchor writes
+// ---------------------------------------------------------------------------
+
+/**
+ * Register the deployed SPP pool address in the payroll contract's Config.
+ * Admin-only (contract enforces require_admin).
+ *
+ * Must be called once after a fresh redeploy before any SPP deposit flow.
+ * The address is stored in Config.spp_pool and is advisory — execute_payout
+ * does not read it, but the frontend uses it for deposit routing.
+ */
+export async function setSppPool(poolAddress: string): Promise<void> {
+  const cfg = chainConfig();
+  await writeContract(cfg.payrollId, "set_spp_pool", [addr(poolAddress)]);
+}
+
+/**
+ * Record a completed off-chain SPP deposit on-chain as a tamper-evident anchor.
+ * Admin-only (contract enforces require_admin).
+ *
+ * Requirements (enforced by the contract):
+ *   - Batch must be in Funded or Processing status.
+ *   - spp_deposit_ref must not already be set (idempotency guard;
+ *     a second call returns SppDepositAlreadyRecorded).
+ *
+ * @param batchId - The on-chain batch ID (u64).
+ * @param sppRef  - Exactly 64 hex characters representing 32 bytes that
+ *                  identify the SPP deposit (e.g. hash of the deposit note
+ *                  commitment). A leading "0x" is stripped if present.
+ *
+ * Emits SppDepositRecorded { batch_id, spp_ref } on success.
+ */
+export async function recordSppDeposit(
+  batchId: number,
+  sppRef: string,
+): Promise<void> {
+  const clean = sppRef.startsWith("0x") ? sppRef.slice(2) : sppRef;
+  if (clean.length !== 64) {
+    throw new Error(
+      `recordSppDeposit: sppRef must be exactly 64 hex chars (32 bytes); got ${clean.length} chars`,
+    );
+  }
+  const cfg = chainConfig();
+  await writeContract(cfg.payrollId, "record_spp_deposit", [
+    u64(batchId),
+    bytesHex(clean),
+  ]);
 }

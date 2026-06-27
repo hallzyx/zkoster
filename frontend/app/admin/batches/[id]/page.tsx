@@ -13,6 +13,7 @@ import { PAYOUT_STATUS, ROLE } from "@/lib/types";
 import { formatPeriod, formatUsd, shortWallet } from "@/lib/utils";
 import { BatchActions } from "./_components/batch-actions";
 import { DisclosureGrantsPanel } from "./_components/disclosure-grants-panel";
+import { SppDepositStep } from "./_components/SppDepositStep";
 
 export const dynamic = "force-dynamic";
 
@@ -64,6 +65,13 @@ export default async function BatchDetail({
         </div>
 
         <BatchActions batchId={batch.id} status={batch.status} />
+
+        <SppDepositStep
+          batchId={batch.id}
+          status={batch.status}
+          sppDepositRef={batch.sppDepositRef}
+          totalAmount={batch.totalAmount}
+        />
 
         <DisclosureGrantsPanel batchId={batch.id} />
 

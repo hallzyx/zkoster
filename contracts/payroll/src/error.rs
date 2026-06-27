@@ -24,4 +24,10 @@ pub enum Error {
     PayoutAlreadyExecuted = 11,
     /// Payout does not belong to the referenced batch.
     BatchPayoutMismatch = 12,
+    /// An SPP deposit reference is already recorded for this batch; overwriting
+    /// is forbidden to keep the anchor tamper-evident.
+    SppDepositAlreadyRecorded = 13,
+    /// An SPP pool address must be configured via `set_spp_pool` before this
+    /// operation can proceed.
+    SppPoolNotSet = 14,
 }

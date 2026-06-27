@@ -11,6 +11,7 @@ import {
 } from "@/lib/data";
 import { PAYOUT_STATUS, ROLE, type Batch } from "@/lib/types";
 import { formatPeriod, formatUsd } from "@/lib/utils";
+import { ClaimFromPool } from "./ClaimFromPool";
 
 export const dynamic = "force-dynamic";
 
@@ -66,6 +67,7 @@ export default async function EmployeePortal() {
                   <th className="px-5 py-3 text-right font-medium">Amount</th>
                   <th className="px-5 py-3 font-medium">Status</th>
                   <th className="px-5 py-3 font-medium">Receipt</th>
+                  <th className="px-5 py-3 font-medium">Privacy Pool</th>
                 </tr>
               </thead>
               <tbody>
@@ -101,6 +103,17 @@ export default async function EmployeePortal() {
                             <FileText className="size-3.5" />
                             pending
                           </span>
+                        )}
+                      </td>
+                      <td className="px-5 py-3">
+                        {p.status === PAYOUT_STATUS.PAID && batch?.sppDepositRef ? (
+                          <ClaimFromPool
+                            payoutId={p.id}
+                            amount={p.amount}
+                            recipientAddress={DEMO_EMPLOYEE_WALLET}
+                          />
+                        ) : (
+                          <span className="text-xs text-slate-700">—</span>
                         )}
                       </td>
                     </tr>
