@@ -24,6 +24,22 @@ hex = "0.4"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
+# SPP core path deps — isolated workspace, never merged into zkoster root Cargo.toml
+prover     = { path = "C:/temp/spp/app/crates/core/prover" }
+witness    = { path = "C:/temp/spp/app/crates/core/witness" }
+types      = { path = "C:/temp/spp/app/crates/core/types" }
+
+# ScVal encoding (mirrors SPP's stellar crate deps, minus the full stellar client)
+stellar-xdr = { version = "26.0.0", features = ["curr", "serde", "std"] }
+sha3 = "0.11"
+parking_lot = "0.12"
+base64 = "0.22"
+
 [dev-dependencies]
 axum-test = "15"
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+
+# Required because wasmer/cranelift inside SPP uses a patched cranelift-control.
+# Patches must appear in the root workspace Cargo.toml of the crate being built.
+[patch.crates-io]
+cranelift-control = { path = "C:/temp/spp/vendor/cranelift-control" }

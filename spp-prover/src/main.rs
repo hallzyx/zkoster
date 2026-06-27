@@ -1,7 +1,8 @@
 mod routes;
+mod soroban_encode;
 mod state;
 
-use axum::{Router, routing::get};
+use axum::{Router, routing::{get, post}};
 use clap::Parser;
 use state::{ProverState, SharedState};
 use std::sync::Arc;
@@ -42,6 +43,8 @@ async fn main() -> anyhow::Result<()> {
 
     let app = Router::new()
         .route("/health", get(routes::health::handler))
+        .route("/spp/membership", get(routes::membership::handler))
+        .route("/spp/deposit", post(routes::deposit::handler))
         .with_state(state);
 
     let addr = format!("127.0.0.1:{}", args.port);
