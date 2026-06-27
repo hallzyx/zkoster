@@ -1,0 +1,29 @@
+# Standalone workspace — NOT a member of the zkoster contracts workspace.
+# Kept isolated because SPP's forked ark-circom conflicts with zkoster's ark-* versions.
+[workspace]
+members = ["."]
+resolver = "2"
+
+[package]
+name = "spp-prover"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "spp-prover"
+path = "src/main.rs"
+
+[dependencies]
+axum = "0.7"
+tokio = { version = "1", features = ["rt-multi-thread", "net", "macros"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+clap = { version = "4", features = ["derive", "env"] }
+anyhow = "1"
+hex = "0.4"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[dev-dependencies]
+axum-test = "15"
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
