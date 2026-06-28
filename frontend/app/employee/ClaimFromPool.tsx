@@ -17,26 +17,26 @@ type ClaimState =
   | { phase: "idle" }
   | { phase: "claiming" }
   | { phase: "claimed"; txHash: string }
-  | { phase: "error"; message: string; isDemo?: boolean };
+  | { phase: "error"; message: string };
 
 export function ClaimFromPool({
   payoutId,
-  amount,
+  batchId,
   recipientAddress,
 }: {
   payoutId: number;
-  amount: number;
+  batchId: number;
   recipientAddress: string;
 }) {
   const [state, setState] = useState<ClaimState>({ phase: "idle" });
 
   async function handleClaim() {
     setState({ phase: "claiming" });
-    const result = await claimPayoutFromPool(payoutId, amount, recipientAddress);
+    const result = await claimPayoutFromPool(payoutId, batchId, recipientAddress);
     if (result.ok) {
       setState({ phase: "claimed", txHash: result.txHash });
     } else {
-      setState({ phase: "error", message: result.error, isDemo: result.isDemo });
+      setState({ phase: "error", message: result.error });
     }
   }
 
@@ -50,9 +50,6 @@ export function ClaimFromPool({
           <ShieldCheck className="size-3.5" />
           Claim from Privacy Pool
         </button>
-        <p className="text-[11px] text-slate-600">
-          Demo: privacy pool claim. In production, proof generation happens client-side.
-        </p>
       </div>
     );
   }
@@ -86,26 +83,17 @@ export function ClaimFromPool({
   // error phase
   return (
     <div className="mt-2 flex flex-col gap-1">
-      {state.isDemo ? (
-        <span className="inline-flex items-center gap-1.5 text-xs font-medium text-violet-400">
-          <ShieldCheck className="size-3.5" />
-          Demo mode: proof verification simulated
-        </span>
-      ) : (
-        <span className="inline-flex items-center gap-1.5 text-xs text-red-400">
-          <AlertCircle className="size-3.5" />
-          Claim failed
-        </span>
-      )}
+      <span className="inline-flex items-center gap-1.5 text-xs text-red-400">
+        <AlertCircle className="size-3.5" />
+        Claim failed
+      </span>
       <p className="max-w-xs text-[11px] text-slate-500">{state.message}</p>
-      {!state.isDemo && (
-        <button
-          onClick={() => setState({ phase: "idle" })}
-          className="text-[11px] text-slate-400 underline hover:text-slate-300"
-        >
-          Try again
-        </button>
-      )}
+      <button
+        onClick={() => setState({ phase: "idle" })}
+        className="text-[11px] text-slate-400 underline hover:text-slate-300"
+      >
+        Try again
+      </button>
     </div>
   );
 }

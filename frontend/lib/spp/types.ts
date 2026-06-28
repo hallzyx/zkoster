@@ -1,20 +1,20 @@
 // SPP SDK — shared TypeScript types.
-//
-// These types model the note-based UTXO system of Stellar Private Payments.
-// In production the commitment and nullifier are BN254 field elements derived
-// by the SPP Rust/WASM prover.  In the hackathon demo they are SHA-256 hashes
-// of locally-generated random values (see notes.ts).
 
 /** A privacy-pool note (unspent UTXO). */
 export type SppNote = {
-  /** Pedersen commitment to the note value, hex-encoded 32 bytes. */
+  /** Pedersen commitment (BE hex 32B) — unique pool leaf identifier. */
   commitment: string;
-  /** Nullifier that is revealed (burned) when the note is spent, hex 32 bytes. */
-  nullifier: string;
-  /** Token amount in the smallest unit (stroops for XLM, 7-decimal for USDC). */
+  /** Token amount in stroops (7-decimal USDC). */
   amount: bigint;
-  /** Stellar address of the note owner. */
-  owner: string;
+  /** Blinding factor (LE hex 32B) — required for withdraw proof. From POST /spp/deposit. */
+  blinding?: string;
+  /** 0-based insertion index in the pool Merkle tree. */
+  leafIndex?: number;
+  /** All pool commitments (BE hex 32B each) at deposit time, in insertion order. Used to rebuild Merkle path for withdraw. */
+  allCommitments?: string[];
+  // Demo-only fields kept for backward compat with notes.ts:
+  nullifier?: string;
+  owner?: string;
 };
 
 /** Result returned by a successful deposit into the SPP pool. */

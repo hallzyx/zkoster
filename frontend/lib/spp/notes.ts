@@ -53,9 +53,9 @@ export function hashNote(note: SppNote): string {
   return createHash("sha256")
     .update("note_hash")
     .update(Buffer.from(note.commitment, "hex"))
-    .update(Buffer.from(note.nullifier, "hex"))
+    .update(Buffer.from(note.nullifier ?? "", "hex"))
     .update(Buffer.from(note.amount.toString()))
-    .update(Buffer.from(note.owner))
+    .update(Buffer.from(note.owner ?? ""))
     .digest("hex");
 }
 

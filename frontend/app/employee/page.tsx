@@ -109,7 +109,7 @@ export default async function EmployeePortal() {
                         {p.status === PAYOUT_STATUS.PAID && batch?.sppDepositRef ? (
                           <ClaimFromPool
                             payoutId={p.id}
-                            amount={p.amount}
+                            batchId={p.batchId}
                             recipientAddress={DEMO_EMPLOYEE_WALLET}
                           />
                         ) : (

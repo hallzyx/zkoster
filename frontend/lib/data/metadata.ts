@@ -99,6 +99,27 @@ export function registerDynamicBatch(batchId: number, data: SeedBatch): void {
   _dynamicBatches.set(batchId, data);
 }
 
+// ---------------------------------------------------------------------------
+// SPP note storage (in-memory, same globalThis lifetime as _dynamicBatches)
+// ---------------------------------------------------------------------------
+// After a real SPP deposit, the note JSON is stored here so the employee claim
+// flow can retrieve it by batchId without requiring a database column.
+
+const _globalForNotes = globalThis as unknown as {
+  __zkosterSppNotes?: Map<number, string>;
+};
+const _sppNotes: Map<number, string> =
+  _globalForNotes.__zkosterSppNotes ??
+  (_globalForNotes.__zkosterSppNotes = new Map<number, string>());
+
+export function setSppNoteForBatch(batchId: number, noteJson: string): void {
+  _sppNotes.set(batchId, noteJson);
+}
+
+export function getSppNoteForBatch(batchId: number): string | null {
+  return _sppNotes.get(batchId) ?? null;
+}
+
 export const seedBatches: SeedBatch[] = [
   {
     name: "March 2026 Payroll",

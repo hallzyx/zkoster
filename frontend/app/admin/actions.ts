@@ -17,12 +17,12 @@ import {
   revokeGrant as chainRevokeGrant,
   type BatchRow,
 } from "@/lib/data/chain-writes";
-import { generateDemoNote, hashNote } from "@/lib/spp/notes";
 import { depositToPool } from "@/lib/spp/pool-client";
 import {
   DEMO_AUDITOR_WALLET,
   registerDynamicBatch,
   seedBatchById,
+  setSppNoteForBatch,
   DEMO_EMPLOYEE_WALLET,
 } from "@/lib/data/metadata";
 
@@ -212,15 +212,10 @@ export type SppDepositActionResult =
  * Deposit the batch total into the SPP privacy pool and anchor the reference on-chain.
  *
  * Server-side orchestration:
- *   1. Generate a demo SPP note for the total amount.
- *   2. Attempt depositToPool (admin signs). DEMO: the on-chain verifier rejects
- *      the placeholder proof — we catch the expected [DEMO] error and fall back
- *      to a deterministic demo txHash so the full data flow is exercised.
- *   3. Derive sppRef = hashNote(note) — a stable 32-byte identifier.
+ *   1. depositToPool — admin signs a real Groth16 proof via spp-prover (port 8788).
+ *   2. Use output_commitment0 as the 32-byte on-chain reference (sppRef).
+ *   3. Store the note in-process for employee claim (batchId → noteJson).
  *   4. Call record_spp_deposit on-chain to anchor the reference (tamper-evident).
- *
- * Runs server-side (admin keypair stays on the server; pool-client.ts uses
- * Node.js `crypto` via notes.ts so it cannot run in the browser).
  */
 export async function depositToPrivacyPoolAction(
   batchId: number,
@@ -247,22 +242,15 @@ export async function depositToPrivacyPoolAction(
     const kp = roleKeypair(ROLE.ADMIN);
     const amount = BigInt(totalAmount);
 
-    // Generate the demo note first so we always have a sppRef regardless of pool result.
-    const note = generateDemoNote(amount, kp.publicKey());
-    const sppRef = hashNote(note);
+    const result = await depositToPool(amount, kp.publicKey(), kp);
+    const txHash = result.txHash;
 
-    // Attempt the real pool transact — the demo placeholder proof will be rejected,
-    // so we catch the expected [DEMO] error and fall back to a derived txHash.
-    let txHash = `demo:spp:${sppRef.slice(0, 16)}`;
-    try {
-      const result = await depositToPool(amount, kp.publicKey(), kp);
-      txHash = result.txHash;
-    } catch (poolErr) {
-      const msg = poolErr instanceof Error ? poolErr.message : String(poolErr);
-      // Only swallow the expected demo proof-rejection error; re-throw anything else.
-      if (!msg.includes("[DEMO]")) throw poolErr;
-      // txHash remains the derived demo value.
-    }
+    // The output commitment is a 32-byte BN254 field element — use it directly
+    // as the on-chain tamper-evident deposit reference (BytesN<32>).
+    const sppRef = result.note.commitment;
+
+    // Store the note in-process so the employee claim flow can retrieve it.
+    setSppNoteForBatch(batchId, JSON.stringify(result.note));
 
     // Anchor the reference on-chain (idempotency guard in the contract).
     await chainRecordSppDeposit(batchId, sppRef);
