@@ -137,8 +137,8 @@ const zeroEncAmt: xdr.ScVal = xdr.ScVal.scvBytes(Buffer.alloc(40));
 // Core write primitive
 // ---------------------------------------------------------------------------
 
-const POLL_INTERVAL_MS = 1500;
-const MAX_POLLS = 30;
+const POLL_INTERVAL_MS = 2000;
+const MAX_POLLS = 60;
 
 /**
  * Build, sign, submit, and confirm a Soroban contract call.
@@ -157,50 +157,70 @@ export async function writeContract(
   const server = new rpc.Server(cfg.rpcUrl);
   const kp: Keypair = roleKeypair(signerRole);
 
-  // 1. Fetch account with current sequence number.
-  const account: Account = await server.getAccount(kp.publicKey());
+  // Retry loop — handles txBadSeq (RPC lag) and TRY_AGAIN_LATER (mempool full).
+  for (let attempt = 0; attempt < 5; attempt++) {
+    // 1. Fetch account with current sequence number.
+    const account: Account = await server.getAccount(kp.publicKey());
 
-  // 2. Build unsigned transaction.
-  const tx = new TransactionBuilder(account, {
-    fee: BASE_FEE,
-    networkPassphrase: cfg.networkPassphrase,
-  })
-    .addOperation(new Contract(contractId).call(method, ...args))
-    .setTimeout(30)
-    .build();
+    // 2. Build unsigned transaction.
+    const tx = new TransactionBuilder(account, {
+      fee: String(10_000), // 10k stroops — above minimum to help with testnet congestion
+      networkPassphrase: cfg.networkPassphrase,
+    })
+      .addOperation(new Contract(contractId).call(method, ...args))
+      .setTimeout(180)
+      .build();
 
-  // 3. Simulate + prepare (footprint, resource fees, auth assembly).
-  const prepared = await server.prepareTransaction(tx);
+    // 3. Simulate + prepare (footprint, resource fees, auth assembly).
+    const prepared = await server.prepareTransaction(tx);
 
-  // 4. Sign with role keypair.
-  prepared.sign(kp);
+    // 4. Sign with role keypair.
+    prepared.sign(kp);
 
-  // 5. Submit.
-  const sent = await server.sendTransaction(prepared);
-  if (sent.status === "ERROR") {
-    throw new Error(
-      `sendTransaction ERROR: ${sent.errorResult?.toXDR("base64") ?? "unknown"}`,
-    );
-  }
-
-  // 6. Poll until confirmed.
-  const hash = sent.hash;
-  for (let i = 0; i < MAX_POLLS; i++) {
-    await new Promise((r) => setTimeout(r, POLL_INTERVAL_MS));
-    const result = await server.getTransaction(hash);
-    if (result.status === rpc.Api.GetTransactionStatus.SUCCESS) {
-      return hash;
+    // 5. Submit with retry on TRY_AGAIN_LATER (testnet congestion).
+    let sent = await server.sendTransaction(prepared);
+    for (let r = 0; sent.status === "TRY_AGAIN_LATER" && r < 5; r++) {
+      await new Promise((res) => setTimeout(res, 3000 * (r + 1)));
+      sent = await server.sendTransaction(prepared);
     }
-    if (result.status === rpc.Api.GetTransactionStatus.FAILED) {
-      const xdrB64 =
-        "resultXdr" in result
-          ? (result as { resultXdr: { toXDR: (enc: string) => string } }).resultXdr.toXDR("base64")
-          : "unavailable";
-      throw new Error(`Transaction FAILED (hash: ${hash}): ${xdrB64}`);
+    if (sent.status === "TRY_AGAIN_LATER") {
+      throw new Error("sendTransaction TRY_AGAIN_LATER: testnet congested after retries");
     }
-    // status === NOT_FOUND — still being ingested; keep polling
+    if (sent.status === "ERROR") {
+      const xdr64 = sent.errorResult?.toXDR("base64") ?? "unknown";
+      // txBadSeq (-5): RPC returned a stale account sequence; re-fetch and retry.
+      // The result code is an int32 at byte offset 8 in the TransactionResult XDR.
+      const errBytes = Buffer.from(xdr64, "base64");
+      const isTxBadSeq = errBytes.length >= 12 && errBytes.readInt32BE(8) === -5;
+      if (isTxBadSeq) {
+        await new Promise((res) => setTimeout(res, 2000 * (attempt + 1)));
+        continue;
+      }
+      throw new Error(`sendTransaction ERROR: ${xdr64}`);
+    }
+
+    // 6. Poll until confirmed.
+    const hash = sent.hash;
+    for (let i = 0; i < MAX_POLLS; i++) {
+      await new Promise((r) => setTimeout(r, POLL_INTERVAL_MS));
+      const result = await server.getTransaction(hash);
+      if (result.status === rpc.Api.GetTransactionStatus.SUCCESS) {
+        // Extra delay: let the RPC fully propagate state changes before next simulation.
+        await new Promise((r) => setTimeout(r, 10_000));
+        return hash;
+      }
+      if (result.status === rpc.Api.GetTransactionStatus.FAILED) {
+        const xdrB64 =
+          "resultXdr" in result
+            ? (result as { resultXdr: { toXDR: (enc: string) => string } }).resultXdr.toXDR("base64")
+            : "unavailable";
+        throw new Error(`Transaction FAILED (hash: ${hash}): ${xdrB64}`);
+      }
+      // status === NOT_FOUND — still being ingested; keep polling
+    }
+    throw new Error(`Transaction timed out after ${MAX_POLLS} polls (hash: ${hash})`);
   }
-  throw new Error(`Transaction timed out after ${MAX_POLLS} polls (hash: ${hash})`);
+  throw new Error(`writeContract: exhausted ${method} retries (txBadSeq)`);
 }
 
 // ---------------------------------------------------------------------------
@@ -241,7 +261,7 @@ export async function createBatch(): Promise<{ batchId: number; txHash: string }
         u64(2), // period_end (placeholder epoch)
       ),
     )
-    .setTimeout(30)
+    .setTimeout(180)
     .build();
 
   const prepared = await server.prepareTransaction(tx);
@@ -261,6 +281,8 @@ export async function createBatch(): Promise<{ batchId: number; txHash: string }
         "returnValue" in result && result.returnValue
           ? Number(scValToNative(result.returnValue) as bigint)
           : 0;
+      // Extra delay: let the RPC propagate the new batch state before next tx simulation.
+      await new Promise((r) => setTimeout(r, 3000));
       return { batchId, txHash: hash };
     }
     if (result.status === rpc.Api.GetTransactionStatus.FAILED) {
@@ -314,6 +336,7 @@ export async function reviewBatchFromRows(
       await writeContract(cfg.complianceId, "register_member", [
         addr(rows[i].wallet),
         memberRoleEmployee,
+        zeroEncR, // pub_key: BytesN<64> — zero placeholder (ECIES not yet emitted by prover)
       ]);
       await writeContract(cfg.payrollId, "add_payout", [
         u64(batchId),
@@ -326,6 +349,23 @@ export async function reviewBatchFromRows(
       const msg = err instanceof Error ? err.message : String(err);
       throw new Error(`add_payout row ${i}: ${msg}`);
     }
+  }
+
+  // Guard: poll get_batch until employee_count > 0 (RPC state propagation lag).
+  // Simulation of review_batch reads employee_count; if stale, it returns EmptyBatch.
+  const server = new rpc.Server(cfg.rpcUrl);
+  for (let poll = 0; poll < 20; poll++) {
+    const src = new Account(Keypair.random().publicKey(), "0");
+    const readTx = new TransactionBuilder(src, { fee: BASE_FEE, networkPassphrase: cfg.networkPassphrase })
+      .addOperation(new Contract(cfg.payrollId).call("get_batch", u64(batchId)))
+      .setTimeout(30)
+      .build();
+    const sim = await server.simulateTransaction(readTx);
+    if (!rpc.Api.isSimulationError(sim) && sim.result) {
+      const raw = scValToNative(sim.result.retval) as { employee_count?: bigint } | null;
+      if (raw && Number(raw.employee_count ?? 0) >= rows.length) break;
+    }
+    await new Promise((r) => setTimeout(r, 3000));
   }
 
   // Step 4: finalize review with the total commitment (sum check on-chain).
@@ -401,7 +441,7 @@ export async function executePayoutsFromRows(
     networkPassphrase: cfg.networkPassphrase,
   })
     .addOperation(new Contract(cfg.payrollId).call("get_batch_payouts", u64(batchId)))
-    .setTimeout(30)
+    .setTimeout(180)
     .build();
 
   const sim = await server.simulateTransaction(readTx);
@@ -509,7 +549,7 @@ export async function issueGrant(
         u64(opts.expiresAt ?? 0),
       ),
     )
-    .setTimeout(30)
+    .setTimeout(180)
     .build();
 
   const prepared = await server.prepareTransaction(tx);

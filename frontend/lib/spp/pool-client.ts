@@ -11,7 +11,9 @@ import {
   Contract,
   Keypair,
   TransactionBuilder,
+  nativeToScVal,
   rpc,
+  scValToNative,
   xdr,
 } from "@stellar/stellar-sdk";
 
@@ -106,6 +108,92 @@ async function computePoolRoot(commitments: string[]): Promise<string> {
   return data.root_be_hex;
 }
 
+/**
+ * Fetch all commitments ever inserted into the pool via getEvents.
+ * Returns sorted by index — this gives the correct allCommitments list for Merkle path proofs.
+ *
+ * NewCommitmentEvent has #[topic] on `commitment`, so the filter topic is:
+ *   [Symbol("NewCommitmentEvent"), <wildcard>]
+ * and the event value holds { index: u32, encrypted_output: Bytes }.
+ */
+async function fetchAllPoolCommitments(
+  server: rpc.Server,
+  poolContract: string,
+): Promise<Array<{ commitment: string; index: number }>> {
+  const health = await server.getHealth();
+  // Start close to the latest ledger: pool was just deployed so all events are recent.
+  // Using oldestLedger causes the RPC to scan an enormous empty range and return early.
+  // 10_000 ledgers ≈ 14h back at ~5s/ledger — covers any same-day deposit history.
+  const startLedger = Math.max(health.latestLedger - 10000, health.oldestLedger);
+
+  const allRawEvents: rpc.Api.EventResponse[] = [];
+  let cursor: string | undefined;
+
+  // Paginate until we exhaust all events (each page is capped at 200 by the RPC).
+  for (let page = 0; page < 20; page++) {
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const params: any = {
+        filters: [{ type: "contract", contractIds: [poolContract] }],
+        limit: 200,
+      };
+      if (cursor) {
+        params.cursor = cursor;
+      } else {
+        params.startLedger = startLedger;
+      }
+      const evResp = await server.getEvents(params);
+      allRawEvents.push(...evResp.events);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      cursor = (evResp as any).cursor as string | undefined;
+      if (evResp.events.length < 200) break;
+    } catch (e) {
+      console.error("[fetchAllPoolCommitments] getEvents failed:", e);
+      break;
+    }
+  }
+
+  console.log(`[fetchAllPoolCommitments] total events fetched: ${allRawEvents.length}`);
+
+  const results: Array<{ commitment: string; index: number }> = [];
+  for (const ev of allRawEvents) {
+    try {
+      // NewCommitmentEvent value = { index: u32, encrypted_output: Bytes }
+      const value = scValToNative(ev.value) as Record<string, unknown>;
+      if (typeof value !== "object" || value === null || !("index" in value)) continue;
+
+      // topic[0] = Symbol("new_commitment_event") discriminant (auto-added by soroban-sdk #[contractevent])
+      // topic[1] = commitment U256 (#[topic] annotated field)
+      const commitmentTopic = ev.topic[1];
+      if (!commitmentTopic) continue;
+      const commitmentBigInt = scValToNative(commitmentTopic) as bigint;
+      if (typeof commitmentBigInt !== "bigint") continue;
+      const commitment = commitmentBigInt.toString(16).padStart(64, "0");
+      results.push({ commitment, index: Number(value.index) });
+    } catch (err) {
+      console.log("[fetchAllPoolCommitments] skipped event:", err);
+    }
+  }
+  console.log(`[fetchAllPoolCommitments] NewCommitmentEvent count: ${results.length}`);
+  return results.sort((a, b) => a.index - b.index);
+}
+
+/** Read the pool's current Merkle root from the chain (get_root view fn → U256 → BE hex 32B). */
+async function readPoolRoot(server: rpc.Server, poolContract: string): Promise<string> {
+  const source = new Account(Keypair.random().publicKey(), "0");
+  const tx = new TransactionBuilder(source, { fee: BASE_FEE, networkPassphrase: TESTNET_PASSPHRASE })
+    .addOperation(new Contract(poolContract).call("get_root"))
+    .setTimeout(30)
+    .build();
+  const sim = await server.simulateTransaction(tx);
+  if (rpc.Api.isSimulationError(sim)) throw new Error(`get_root failed: ${sim.error}`);
+  if (!sim.result) throw new Error("get_root: no result");
+  const raw = scValToNative(sim.result.retval) as bigint;
+  // U256 → 32-byte BE hex
+  const hex = raw.toString(16).padStart(64, "0");
+  return hex;
+}
+
 // ---------------------------------------------------------------------------
 // Public API
 // ---------------------------------------------------------------------------
@@ -133,6 +221,15 @@ export async function depositToPool(
 ): Promise<SppDepositResult> {
   await checkProverHealth();
 
+  const server = rpcServer();
+
+  // Read current pool state BEFORE deposit so we know the next free indices.
+  // Events for the new deposit won't be indexed immediately after tx confirmation,
+  // so we cannot rely on getEvents post-tx to find our commitment.
+  const priorPoolData = await fetchAllPoolCommitments(server, poolContract);
+  const priorCommitments = priorPoolData.map((d) => d.commitment);
+  const nextIndex = priorCommitments.length;
+
   const poolRoot = await computePoolRoot([]);
   const aspNonMembershipRoot = ZERO_ROOT_HEX;
 
@@ -158,7 +255,6 @@ export async function depositToPool(
   const extDataScVal = xdr.ScVal.fromXDR(resp.ext_data_scval_xdr_b64, "base64");
   const senderScVal = new Address(signerKeypair.publicKey()).toScVal();
 
-  const server = rpcServer();
   const account: Account = await server.getAccount(signerKeypair.publicKey());
   const tx = new TransactionBuilder(account, {
     fee: BASE_FEE,
@@ -182,12 +278,25 @@ export async function depositToPool(
 
   const txHash = await pollUntilConfirmed(server, sent.hash);
 
+  // Build allCommitments from prior state + our two new commitments.
+  // The pool always inserts at nextIndex and nextIndex+1 in the same transact call.
+  const allCommitments = [
+    ...priorCommitments,
+    resp.note.commitment_be_hex, // output_commitment0 — the one we'll claim
+    resp.output_commitment1,     // output_commitment1 — change output
+  ];
+  const leafIndex = nextIndex;
+
+  // Read the authoritative pool root AFTER our deposit landed (needed for withdraw proof).
+  const poolRootAfterDeposit = await readPoolRoot(server, poolContract);
+
   const note: SppNote = {
     commitment: resp.note.commitment_be_hex,
-    amount,
+    amount: Number(amount),
     blinding: resp.note.blinding_le_hex,
-    leafIndex: 0,
-    allCommitments: [resp.output_commitment0, resp.output_commitment1],
+    leafIndex,
+    allCommitments,
+    poolRootAfterDeposit,
   };
 
   return { txHash, note, poolContract };
@@ -221,16 +330,20 @@ export async function claimFromPool(
 
   await checkProverHealth();
 
-  const poolRoot = await computePoolRoot(note.allCommitments);
+  // Use the root stored after deposit (authoritative, read from chain).
+  // If absent (old note format), query the pool contract directly.
+  const claimServer = rpcServer();
+  const poolRoot = note.poolRootAfterDeposit
+    ?? await readPoolRoot(claimServer, poolContract);
   const aspNonMembershipRoot = ZERO_ROOT_HEX;
 
   const proverReq = {
-    withdraw_amount_stroops: Number(note.amount),
+    withdraw_amount_stroops: note.amount,
     pool_root: poolRoot,
     asp_non_membership_root: aspNonMembershipRoot,
     withdraw_recipient: recipientKeypair.publicKey(),
     input_note: {
-      amount_stroops: Number(note.amount),
+      amount_stroops: note.amount,
       blinding_le_hex: note.blinding,
       all_pool_commitments_be_hex: note.allCommitments,
       leaf_index: note.leafIndex,

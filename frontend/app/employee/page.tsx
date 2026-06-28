@@ -9,6 +9,7 @@ import {
   getMember,
   listBatches,
 } from "@/lib/data";
+import { getSppNoteForBatch } from "@/lib/data/metadata";
 import { PAYOUT_STATUS, ROLE, type Batch } from "@/lib/types";
 import { formatPeriod, formatUsd } from "@/lib/utils";
 import { ClaimFromPool } from "./ClaimFromPool";
@@ -106,7 +107,8 @@ export default async function EmployeePortal() {
                         )}
                       </td>
                       <td className="px-5 py-3">
-                        {p.status === PAYOUT_STATUS.PAID && batch?.sppDepositRef ? (
+                        {p.status === PAYOUT_STATUS.PAID &&
+                        (batch?.sppDepositRef || getSppNoteForBatch(p.batchId)) ? (
                           <ClaimFromPool
                             payoutId={p.id}
                             batchId={p.batchId}

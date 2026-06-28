@@ -40,10 +40,11 @@ export async function claimPayoutFromPool(
     const raw = JSON.parse(noteJson) as Record<string, unknown>;
     const note: SppNote = {
       commitment: raw.commitment as string,
-      amount: BigInt(raw.amount as string | number),
+      amount: raw.amount as number,
       blinding: raw.blinding as string,
       leafIndex: raw.leafIndex as number,
       allCommitments: raw.allCommitments as string[],
+      poolRootAfterDeposit: raw.poolRootAfterDeposit as string | undefined,
     };
 
     const result = await claimFromPool(note, keypair);

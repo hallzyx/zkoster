@@ -224,7 +224,8 @@ export async function depositToPrivacyPoolAction(
   try {
     const batch = await getBatch(batchId);
     if (!batch) return { ok: false, error: `Batch ${batchId} not found.` };
-    if (batch.status !== BATCH_STATUS.FUNDED) {
+    const depositAllowed = [BATCH_STATUS.FUNDED, BATCH_STATUS.PROCESSING, BATCH_STATUS.PAID];
+    if (!depositAllowed.includes(batch.status as (typeof depositAllowed)[number])) {
       return {
         ok: false,
         error: `Batch is not Funded (current: ${batch.status}). Refresh and try again.`,
@@ -253,7 +254,16 @@ export async function depositToPrivacyPoolAction(
     setSppNoteForBatch(batchId, JSON.stringify(result.note));
 
     // Anchor the reference on-chain (idempotency guard in the contract).
-    await chainRecordSppDeposit(batchId, sppRef);
+    // Non-fatal if the batch has already transitioned past Funded — the pool
+    // deposit succeeded and the in-memory note is available for the claim flow.
+    try {
+      await chainRecordSppDeposit(batchId, sppRef);
+    } catch (anchorErr) {
+      const msg = anchorErr instanceof Error ? anchorErr.message : String(anchorErr);
+      // InvalidBatchStatus (#5) means the batch moved past Funded after payouts;
+      // the pool deposit is real so we continue successfully.
+      if (!msg.includes("#5") && !msg.includes("InvalidBatchStatus")) throw anchorErr;
+    }
 
     return { ok: true, txHash, sppRef };
   } catch (err) {

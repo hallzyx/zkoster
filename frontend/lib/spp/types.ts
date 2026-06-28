@@ -4,14 +4,16 @@
 export type SppNote = {
   /** Pedersen commitment (BE hex 32B) — unique pool leaf identifier. */
   commitment: string;
-  /** Token amount in stroops (7-decimal USDC). */
-  amount: bigint;
+  /** Token amount in stroops (7-decimal USDC). Stored as number (fits in JS safe integer). */
+  amount: number;
   /** Blinding factor (LE hex 32B) — required for withdraw proof. From POST /spp/deposit. */
   blinding?: string;
   /** 0-based insertion index in the pool Merkle tree. */
   leafIndex?: number;
   /** All pool commitments (BE hex 32B each) at deposit time, in insertion order. Used to rebuild Merkle path for withdraw. */
   allCommitments?: string[];
+  /** Actual pool Merkle root read from chain right after deposit. Used directly in withdraw proof to avoid off-chain recomputation. */
+  poolRootAfterDeposit?: string;
   // Demo-only fields kept for backward compat with notes.ts:
   nullifier?: string;
   owner?: string;
@@ -32,5 +34,5 @@ export type SppClaimResult = {
   /** Confirmed Stellar transaction hash. */
   txHash: string;
   /** Amount received (mirrors the note amount). */
-  amount: bigint;
+  amount: number;
 };
