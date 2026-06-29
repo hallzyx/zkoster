@@ -1,5 +1,3 @@
-import { Download, FileText } from "lucide-react";
-
 import { TopBar } from "@/app/_components/top-bar";
 import { PayoutStatusBadge } from "@/app/_components/status-badge";
 import { Card, SectionHeading, StatCard } from "@/app/_components/ui";
@@ -67,7 +65,6 @@ export default async function EmployeePortal() {
                   <th className="px-5 py-3 font-medium">Period</th>
                   <th className="px-5 py-3 text-right font-medium">Amount</th>
                   <th className="px-5 py-3 font-medium">Status</th>
-                  <th className="px-5 py-3 font-medium">Receipt</th>
                   <th className="px-5 py-3 font-medium">Privacy Pool</th>
                 </tr>
               </thead>
@@ -94,19 +91,6 @@ export default async function EmployeePortal() {
                         <PayoutStatusBadge status={p.status} />
                       </td>
                       <td className="px-5 py-3">
-                        {p.receiptRef ? (
-                          <span className="inline-flex items-center gap-1.5 text-xs text-emerald-300">
-                            <Download className="size-3.5" />
-                            {p.receiptRef}
-                          </span>
-                        ) : (
-                          <span className="inline-flex items-center gap-1.5 text-xs text-slate-600">
-                            <FileText className="size-3.5" />
-                            pending
-                          </span>
-                        )}
-                      </td>
-                      <td className="px-5 py-3">
                         {p.status === PAYOUT_STATUS.PAID &&
                         (batch?.sppDepositRef || getSppNoteForBatch(p.batchId)) ? (
                           <ClaimFromPool
@@ -114,6 +98,13 @@ export default async function EmployeePortal() {
                             batchId={p.batchId}
                             recipientAddress={DEMO_EMPLOYEE_WALLET}
                           />
+                        ) : p.status === PAYOUT_STATUS.PAID ? (
+                          <span
+                            className="text-xs text-slate-600"
+                            title="Admin did not deposit this batch to the Privacy Pool."
+                          >
+                            no SPP note
+                          </span>
                         ) : (
                           <span className="text-xs text-slate-700">—</span>
                         )}

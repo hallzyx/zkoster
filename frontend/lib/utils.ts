@@ -31,8 +31,15 @@ export function shortWallet(wallet: string): string {
 }
 
 export function formatPeriod(start: string, end: string): string {
+  // Parse "YYYY-MM-DD" as a local date (not UTC) to avoid the off-by-one that
+  // happens when a date-only ISO string is interpreted as UTC midnight and
+  // then displayed in a negative-offset timezone (e.g. 2026-06-01 → May 31).
+  const parseLocal = (iso: string) => {
+    const [y, m, d] = iso.split("-").map(Number);
+    return new Date(y, (m ?? 1) - 1, d ?? 1);
+  };
   const fmt = (iso: string) =>
-    new Date(iso).toLocaleDateString("en-US", {
+    parseLocal(iso).toLocaleDateString("en-US", {
       month: "short",
       day: "numeric",
       year: "numeric",

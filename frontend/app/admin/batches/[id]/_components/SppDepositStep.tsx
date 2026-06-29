@@ -4,7 +4,9 @@ import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 
 import { Card } from "@/app/_components/ui";
+import { TxHashLink } from "@/app/_components/tx-hash-link";
 import { cn } from "@/lib/utils";
+import { PUBLIC_NETWORK_PASSPHRASE } from "@/lib/config";
 import { BATCH_STATUS, type BatchStatus } from "@/lib/types";
 import {
   depositToPrivacyPoolAction,
@@ -64,10 +66,14 @@ export function SppDepositStep({
 
   if (!isFunded) return null;
 
-  // Determine effective deposit ref: prefer the just-recorded result over the
-  // prop so the UI updates immediately without waiting for a page refresh.
+  // Determine effective deposit ref + tx hash: prefer the just-recorded result
+  // over the props so the UI updates immediately without waiting for a page
+  // refresh. The "tx hash" is only available from the local result — when
+  // reading from storage (sppDepositRef populated server-side), we don't have
+  // the tx hash on the read path, so we fall back to a static label.
   const effectiveRef =
     (result?.ok ? result.sppRef : null) ?? sppDepositRef;
+  const effectiveTxHash = result?.ok ? result.txHash : null;
 
   function handleDeposit() {
     if (pending || effectiveRef) return;
@@ -134,14 +140,16 @@ export function SppDepositStep({
           >
             {shortRef(effectiveRef)}
           </span>
-          {result?.ok && (
+          {effectiveTxHash ? (
             <span className="mt-0.5 font-mono text-xs text-slate-500">
-              tx{" "}
-              <span className="text-slate-400">
-                {result.txHash.startsWith("demo:")
-                  ? result.txHash
-                  : `${result.txHash.slice(0, 8)}…${result.txHash.slice(-6)}`}
-              </span>
+              <TxHashLink
+                hash={effectiveTxHash}
+                passphrase={PUBLIC_NETWORK_PASSPHRASE}
+              />
+            </span>
+          ) : (
+            <span className="mt-0.5 text-xs text-slate-600">
+              Deposit tx recorded on-chain
             </span>
           )}
         </div>

@@ -64,11 +64,22 @@ export default async function Home() {
         ))}
       </div>
 
-      <p className="text-xs text-slate-600">
-        Demo login by role — no real authentication. Cleartext amounts shown here
-        are the company&apos;s own off-chain records; the public ledger only ever
-        sees Pedersen commitments.
-      </p>
+      <div className="flex flex-col gap-2 rounded-xl border border-slate-800 bg-slate-900/40 p-4">
+        <div className="flex items-center gap-2">
+          <ShieldCheck className="size-4 text-emerald-400" />
+          <span className="text-sm font-medium text-white">
+            What the public Stellar ledger sees
+          </span>
+        </div>
+        <p className="text-sm leading-relaxed text-slate-400">
+          The amounts shown in this demo are the company&apos;s own off-chain
+          records. On the public Stellar ledger, each payout is represented
+          only by a <span className="font-mono text-xs text-slate-300">Pedersen commitment</span> and a
+          <span className="font-mono text-xs text-slate-300"> Groth16 range proof</span> — never a cleartext
+          salary. The demo switches between three roles with no real
+          authentication.
+        </p>
+      </div>
     </main>
   );
 }

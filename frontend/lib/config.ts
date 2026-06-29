@@ -13,6 +13,18 @@ export type DataSource = (typeof DATA_SOURCE)[keyof typeof DATA_SOURCE];
 const TESTNET_PASSPHRASE = "Test SDF Network ; September 2015";
 const TESTNET_RPC = "https://soroban-testnet.stellar.org";
 
+/**
+ * Network passphrase exposed to client components. Client components can't call
+ * `getConfig()` (it's server-only because it reads process.env at request time),
+ * so this is a build-time constant derived from the same env var.
+ *
+ * Used by `TxHashLink` to pick the right Stellar Expert subdomain.
+ */
+export const PUBLIC_NETWORK_PASSPHRASE =
+  process.env.NEXT_PUBLIC_STELLAR_NETWORK_PASSPHRASE ??
+  process.env.STELLAR_NETWORK_PASSPHRASE ??
+  TESTNET_PASSPHRASE;
+
 export interface ChainConfig {
   rpcUrl: string;
   networkPassphrase: string;
