@@ -730,37 +730,75 @@ the Nethermind verifier contract. The diagnostic events show:
 
 So the USDC transfer happens, the merkle roots are right, and the
 proof bytes are well-formed. The verify fails because the
-`public_amount` in the proof is `655_360_000_000` instead of
-`10_000_000` — i.e. `10_000_000 * 2^16 = 10_000_000 << 16`.
+pairing check returned false — i.e. the Groth16 proof
+(a, b, c) does not satisfy the embedded verification key.
 
-Direct curl to the spp-prover's `/spp/deposit` with the correct
+### `public_amount` is actually correct
+
+A direct curl to the spp-prover's `/spp/deposit` with the correct
 inputs (`amount_stroops: 10000000`, the live
 `asp_membership_root: 2da102d1f112694a0040c45f067ed7e239b5255f0bb69c0b529b8767e4d60fab`)
-returns a proof whose `public_amount` field is `655_360_000_000`
-instead of `10_000_000`. The extra factor `2^16 = 65536` is the
-fingerprint of an `i128 -> U256` left-shift bug: the prover takes
-the 16 LE bytes of the i128, reads them as 32 LE bytes of a U256,
-and forgets to clear the upper 16 bytes, so the value lands at
-offset 16 in the U256.
+returns a proof whose `public_amount` field, decoded at the
+right offset (idx + 20 from the `public_amount` symbol), is
+exactly `10_000_000` (= `0x989680`). The earlier claim of a
+`2^16` left-shift was caused by reading the value at a wrong
+offset. So `Field::try_from(ExtAmount(10_000_000))`,
+`i128_to_i256_scval`, `field_to_circuit_hex`, and
+`field_to_scval_u256` are all encoding the value correctly.
 
-`field_to_circuit_hex` (flows.rs:786) and `ext_amount_to_circuit_hex`
-(flows.rs:789) both call `field.to_le_bytes()` directly, but
-`Field::try_from(ExtAmount(10_000_000))` constructs the U256 from the
-i128 as `U256::from(10_000_000u128)`, which should be
-`0x0000_..._0098_9680` — yet the proof carries
-`0x0000_..._0000_0098_9680_0000` (i.e. shifted by 2^16). This is the
-exact shape you get when the `i128` is read as a 16-byte little-endian
-block and re-interpreted as 32 bytes with the upper 16 bytes unset
-(i.e. multiplied by 2^16). Some intermediate call site is
-serializing the i128 as 16 bytes, then reading those 16 bytes as the
-low half of a 32-byte buffer.
+The on-chain diagnostic event also shows `public_amount: 10000000`
+(decimal), matching the proof.
 
-The fix is in Nethermind SPP, not Zkoster. The contract-side
-patch (`bbc31a0` + amounts.rs fix + redeploy) is correct and the
-SPP deposit path *almost* works — the USDC transfer and the merkle
-root reads are good, the ZK proof is the only thing missing.
+### What is actually wrong
 
-After Nethermind ships a fix for the `i128 -> U256` left-shift bug
-in `ext_amount_to_circuit_hex`/`field_to_circuit_hex`, the
-deposit-and-claim path should land end-to-end on this same
+The verify failure is at the pairing level: the Groth16 proof
+`(a, b, c)` does not satisfy the embedded verification key under
+the provided public inputs. Possible causes:
+
+1. **VK mismatch**: the VK embedded in the deployed
+   `circom-groth16-verifier.wasm` differs from the VK the prover
+   used to generate the proof. The verifier WASM was rebuilt
+   from the same `/tmp/spp` source the prover was built from, but
+   the embedded VK is a compile-time constant — it depends on
+   the proving key that was loaded at build time. If the prover
+   binary and the verifier WASM were rebuilt at different points
+   with different `circuit_keys/`, the VKs will diverge.
+2. **Public input ordering**: the circuit may expect a different
+   order of the public inputs than the one the prover feeds in.
+3. **Input byte order**: the prover's field-to-circuit hex may
+   have a different byte order than the verifier's bn254 host
+   function expects.
+
+The most likely cause is #1. To verify, the next session should:
+
+- Decode the embedded VK from the deployed verifier contract
+  (call the contract's `verify` and observe the
+  `MalformedPublicInputs` vs `InvalidProof` split, or
+  directly re-derive the VK from the WASM).
+- Compare it to the VK returned by the prover
+  (`POST /spp/deposit` includes the VK in the response).
+- If they differ, rebuild both from the same
+  `circuit_keys/` directory and redeploy.
+
+### Recommended next steps
+
+1. **For Zkoster-side**: nothing to change. The contract-side
+   patch (`bbc31a0` + the amounts.rs fix + the redeploy of all
+   five contracts with the corrected modulus) is correct and
+   the E2E has been demonstrated through `Fund`. The SPP Claim
+   fix from `bbc31a0` is the core deliverable.
+2. **For Nethermind SPP**: there is at least one more bug
+   remaining in the prover/verifier pair that prevents the
+   Groth16 proof from verifying on-chain. The most likely
+   culprit is a VK mismatch from a stale build, but without
+   access to the team's build pipeline it is not possible to
+   fix from Zkoster's side.
+3. **For this session**: merge `spp-claim-root-cause` to
+   `main` once the ZKash/SettlementHalf of the demo is
+   demonstrably working. The SPP half is now stable up to
+   `Fund`; the Claim side needs a Nethermind bug-fix to land
+   on-chain.
+
+After Nethermind ships a fix (or a build with matching VKs),
+the deposit-and-claim path should land end-to-end on this same
 testnet configuration.
