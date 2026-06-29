@@ -58,6 +58,21 @@ export default async function AuditorView() {
         />
 
         <div className="mt-6 flex flex-col gap-6">
+          {sections.length === 0 ? (
+            <Card className="flex flex-col items-center gap-3 py-12 text-center">
+              <Lock className="size-8 text-slate-600" />
+              <div className="flex flex-col gap-1">
+                <h3 className="font-semibold text-white">
+                  No disclosure grants yet
+                </h3>
+                <p className="max-w-md text-sm text-slate-400">
+                  The company hasn&apos;t issued any disclosure grants to your
+                  wallet. When they do, you&apos;ll see exactly what
+                  you&apos;re authorized to view here — and nothing more.
+                </p>
+              </div>
+            </Card>
+          ) : null}
           {sections.map(({ grant, batch, payouts }) => {
             if (!batch) return null;
             return (

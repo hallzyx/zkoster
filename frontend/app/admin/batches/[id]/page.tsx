@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { ArrowLeft } from "lucide-react";
+import { ArrowLeft, ChevronRight, Home } from "lucide-react";
 
 import { TopBar } from "@/app/_components/top-bar";
 import {
@@ -8,7 +8,9 @@ import {
   PayoutStatusBadge,
 } from "@/app/_components/status-badge";
 import { Card, SectionHeading, StatCard } from "@/app/_components/ui";
+import { TxHashLink } from "@/app/_components/tx-hash-link";
 import { getBatch, getBatchPayouts } from "@/lib/data";
+import { getConfig } from "@/lib/config";
 import { PAYOUT_STATUS, ROLE } from "@/lib/types";
 import { formatPeriod, formatUsd, shortWallet } from "@/lib/utils";
 import { BatchActions } from "./_components/batch-actions";
@@ -34,13 +36,45 @@ export default async function BatchDetail({
     <>
       <TopBar role={ROLE.ADMIN} />
       <main className="mx-auto w-full max-w-6xl flex-1 px-6 py-8">
-        <Link
-          href="/admin"
-          className="inline-flex items-center gap-1.5 text-sm text-slate-400 transition-colors hover:text-white"
-        >
-          <ArrowLeft className="size-4" />
-          Dashboard
-        </Link>
+        <nav aria-label="Breadcrumb">
+          <ol className="flex flex-wrap items-center gap-1.5 text-sm text-slate-400">
+            <li>
+              <Link
+                href="/admin"
+                className="inline-flex items-center gap-1 transition-colors hover:text-white"
+              >
+                <Home className="size-3.5" />
+                Admin
+              </Link>
+            </li>
+            <li aria-hidden="true">
+              <ChevronRight className="size-3.5 text-slate-700" />
+            </li>
+            <li>
+              <Link
+                href="/admin"
+                className="transition-colors hover:text-white"
+              >
+                Batches
+              </Link>
+            </li>
+            <li aria-hidden="true">
+              <ChevronRight className="size-3.5 text-slate-700" />
+            </li>
+            <li className="font-medium text-white" aria-current="page">
+              #{batch.id} {batch.name}
+            </li>
+          </ol>
+        </nav>
+        <div className="mt-4">
+          <Link
+            href="/admin"
+            className="inline-flex items-center gap-1.5 text-xs text-slate-500 transition-colors hover:text-slate-300"
+          >
+            <ArrowLeft className="size-3.5" />
+            Back to dashboard
+          </Link>
+        </div>
 
         <div className="mt-4">
           <SectionHeading
@@ -57,9 +91,11 @@ export default async function BatchDetail({
           <StatCard
             label="Settlement"
             value={
-              <span className="text-base font-medium">
-                {batch.settlementRef ?? "—"}
-              </span>
+              <TxHashLink
+                hash={batch.settlementRef}
+                passphrase={getConfig().chain?.networkPassphrase ?? ""}
+                short={false}
+              />
             }
           />
         </div>
@@ -115,8 +151,11 @@ export default async function BatchDetail({
                     <td className="px-5 py-3">
                       <PayoutStatusBadge status={p.status} />
                     </td>
-                    <td className="px-5 py-3 font-mono text-xs text-slate-500">
-                      {p.txRef ?? "—"}
+                    <td className="px-5 py-3">
+                      <TxHashLink
+                        hash={p.txRef}
+                        passphrase={getConfig().chain?.networkPassphrase ?? ""}
+                      />
                     </td>
                   </tr>
                 ))}

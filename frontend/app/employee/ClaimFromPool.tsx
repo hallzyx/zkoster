@@ -11,6 +11,8 @@
 import { useState } from "react";
 import { ShieldCheck, Loader2, AlertCircle } from "lucide-react";
 
+import { TxHashLink } from "@/app/_components/tx-hash-link";
+import { PUBLIC_NETWORK_PASSPHRASE } from "@/lib/config";
 import { claimPayoutFromPool } from "./actions";
 
 type ClaimState =
@@ -70,9 +72,7 @@ export function ClaimFromPool({
           <ShieldCheck className="size-3.5" />
           Claimed ✓
         </span>
-        <span className="font-mono text-[11px] text-slate-500">
-          tx: {state.txHash.slice(0, 12)}…{state.txHash.slice(-6)}
-        </span>
+        <TxHashLink hash={state.txHash} passphrase={PUBLIC_NETWORK_PASSPHRASE} />
         <p className="text-[11px] text-slate-500">
           Your payment has been privately transferred.
         </p>
