@@ -86,6 +86,25 @@ export default async function AdminDashboard() {
 
         <div className="mt-8">
           <SectionHeading title="Batches" subtitle="Totals are visible to the company only." />
+          {batches.length === 0 ? (
+            <Card className="mt-4 flex flex-col items-center gap-3 py-12 text-center">
+              <Layers className="size-8 text-slate-600" />
+              <div className="flex flex-col gap-1">
+                <h3 className="font-semibold text-white">No batches yet</h3>
+                <p className="max-w-md text-sm text-slate-400">
+                  Create your first payroll batch to commit a Pedersen total
+                  on-chain and prove each amount with a Groth16 range proof.
+                </p>
+              </div>
+              <Link
+                href="/admin/batches/new"
+                className="mt-2 inline-flex items-center gap-1.5 rounded-lg bg-emerald-500 px-3.5 py-2 text-sm font-medium text-slate-950 transition-colors hover:bg-emerald-400"
+              >
+                <Plus className="size-4" />
+                New Payroll Batch
+              </Link>
+            </Card>
+          ) : (
           <Card className="mt-4 overflow-hidden p-0">
             <table className="w-full text-sm">
               <thead>
@@ -151,6 +170,7 @@ export default async function AdminDashboard() {
               </tbody>
             </table>
           </Card>
+          )}
         </div>
       </main>
     </>
