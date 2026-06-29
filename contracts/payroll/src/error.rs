@@ -30,4 +30,10 @@ pub enum Error {
     /// An SPP pool address must be configured via `set_spp_pool` before this
     /// operation can proceed.
     SppPoolNotSet = 14,
+    /// The employee already has a payout in this batch — used to make
+    /// `add_payout` idempotent against the frontend's writeContract retry
+    /// loop (so a lost-in-mempool retry that re-mands an already-applied
+    /// TX does not silently create a duplicate row that would break the
+    /// on-chain sum check in `approve_batch`).
+    EmployeeAlreadyInBatch = 15,
 }

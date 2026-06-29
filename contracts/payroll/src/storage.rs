@@ -136,3 +136,21 @@ pub fn add_employee_payout(e: &Env, employee: &Address, payout_id: u64) {
         .persistent()
         .extend_ttl(&key, PERSISTENT_THRESHOLD, PERSISTENT_BUMP);
 }
+
+/// Returns true if `employee` already has a payout in `batch_id`.
+///
+/// Used by `add_payout` to make the operation idempotent against the
+/// writeContract retry loop in the frontend: if a `lost-in-mempool`
+/// retry re-mands an already-applied add_payout, the contract must
+/// reject it (instead of silently creating a duplicate row that
+/// breaks the on-chain sum check in `approve_batch`).
+pub fn employee_in_batch(e: &Env, employee: &Address, batch_id: u64) -> bool {
+    for pid in get_employee_payouts(e, employee).iter() {
+        if let Some(p) = get_payout(e, pid) {
+            if p.batch_id == batch_id {
+                return true;
+            }
+        }
+    }
+    false
+}

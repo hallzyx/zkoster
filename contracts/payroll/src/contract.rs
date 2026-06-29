@@ -95,6 +95,15 @@ impl PayrollContract {
             return Err(Error::EmployeeNotAuthorized);
         }
 
+        // Idempotency guard: a writeContract retry on a lost-in-mempool TX
+        // may re-mand an add_payout that was already applied. Without this
+        // check the second execution would create a duplicate payout row,
+        // and the on-chain sum check in approve_batch would fail because
+        // duplicate commitments * 2 != total_commitment.
+        if storage::employee_in_batch(&e, &employee, batch_id) {
+            return Err(Error::EmployeeAlreadyInBatch);
+        }
+
         let payout_id = storage::next_payout_id(&e);
         let payout = Payout {
             payout_id,
@@ -300,11 +309,7 @@ impl PayrollContract {
     /// - Does not change batch status — it is a side annotation.
     ///
     /// Admin-only.
-    pub fn record_spp_deposit(
-        e: Env,
-        batch_id: u64,
-        spp_ref: BytesN<32>,
-    ) -> Result<(), Error> {
+    pub fn record_spp_deposit(e: Env, batch_id: u64, spp_ref: BytesN<32>) -> Result<(), Error> {
         require_admin(&e)?;
         let mut batch = storage::get_batch(&e, batch_id).ok_or(Error::BatchNotFound)?;
         if batch.status != BatchStatus::Funded && batch.status != BatchStatus::Processing {

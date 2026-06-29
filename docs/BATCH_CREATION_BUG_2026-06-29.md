@@ -655,3 +655,50 @@ review flow re-running.
    original seqnum was consumed, the TX was applied and no retry
    is needed.
 3. Re-run a fresh batch E2E with these two changes.
+
+## 9. Idempotency fix applied (2026-06-29, this session)
+
+The fix from §7 step 1 is now in. Two changes to the contract:
+
+1. `storage::employee_in_batch(e, employee, batch_id) -> bool` helper
+   in `contracts/payroll/src/storage.rs:138-150` — iterates the
+   employee's payout IDs and returns true if any of them already
+   belong to `batch_id`.
+2. `add_payout` in `contracts/payroll/src/contract.rs:104-109` calls
+   this helper after the `is_authorized` check and returns the new
+   error variant `Error::EmployeeAlreadyInBatch = 15`
+   (added in `contracts/payroll/src/error.rs:36-39`).
+
+The 17 existing unit tests still pass (`cargo test -p zkoster-payroll`).
+
+### E2E on the fresh payroll (this session)
+
+1. Built and deployed the new `zkoster_payroll.wasm`
+   (hash `969b5b28d55e29d874696415eb4aee282d59b9045a0340483936a34ffc48b965`).
+2. `set_spp_pool` and `initialize` against the redeployed
+   verifier + compliance + spp-pool contracts.
+3. Updated `frontend/.env.local`:
+   - `ZKOSTER_PAYROLL_ID=CCLZIBVIENYZQQ6C7VHZCIODQYG2OKMLAN6L7UF3N37EHFXYPQXAYGD7`
+   - `ZKOSTER_VERIFIER_ID=CA3MMDSPOZ7ZBUSI7ZERTPYB4GWTNTRFPKBH3FMFGUNP43BRQ75EZEFC`
+   - `ZKOSTER_COMPLIANCE_ID=CCIKOTRMAIQ3YBYCLU5C5BTZSIAZWZ4WTCW2LHHQ3H3WN2LEWCBZDCHM`
+4. Created batch #1 "Idempotent V4" (1 recipient, Sofía,
+   $1,000). The batch reached `Reviewed` state with
+   `employee_count = 1` (no duplicates) and
+   `total_commitment = 2d3e0aee...045c7ce`.
+5. Approve batch succeeded:
+   `status: 2 (Approved)`, `approved_by: GATDWJ...`. The
+   `check_commitment_sum` returned true this time.
+
+### Outstanding for a follow-up session
+
+1. Fund batch, run SPP deposit, then SPP claim against the new
+   pool. The contract path is now the same as the validated SPP
+   prover, so the only remaining latency is testnet mempool retries.
+2. **Tighten `writeContract` retry** (the second recommended fix
+   from §7). It is still possible to create a duplicate if a
+   retry's original TX lands just after the polling lost it; the
+   contract-side idempotency above is the correct safety net, but
+   tightening the client to avoid re-manding after a confirmed
+   loss would be cleaner.
+3. Merge `spp-claim-root-cause` to `main` once the full SPP
+   Claim path lands on-chain.
