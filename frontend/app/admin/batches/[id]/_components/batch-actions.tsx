@@ -21,6 +21,8 @@ import {
 interface BatchActionsProps {
   batchId: number;
   status: BatchStatus;
+  /** Hex-encoded 32-byte SPP deposit ref, or null if not yet deposited. */
+  sppDepositRef: string | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -67,13 +69,18 @@ const TERMINAL_STATUSES: BatchStatus[] = [
 // Component
 // ---------------------------------------------------------------------------
 
-export function BatchActions({ batchId, status }: BatchActionsProps) {
+export function BatchActions({ batchId, status, sppDepositRef }: BatchActionsProps) {
   const [pending, startTransition] = useTransition();
   const [result, setResult] = useState<ActionResult | null>(null);
   const router = useRouter();
 
-  const step = STEP_MAP[status];
   const isTerminal = TERMINAL_STATUSES.includes(status);
+  // Execute payouts requires a SPP deposit first — otherwise the employee
+  // has no SPP note to claim and the privacy rail is skipped silently.
+  const isExecutePendingDeposit =
+    (status === BATCH_STATUS.FUNDED || status === BATCH_STATUS.PROCESSING) &&
+    !sppDepositRef;
+  const step = isExecutePendingDeposit ? null : STEP_MAP[status];
 
   function handleClick() {
     if (!step || pending) return;
@@ -95,6 +102,18 @@ export function BatchActions({ batchId, status }: BatchActionsProps) {
           <span className="text-sm text-slate-500 italic">
             No further action — batch is {status}.
           </span>
+        ) : isExecutePendingDeposit ? (
+          <button
+            type="button"
+            disabled
+            title="Deposit to Privacy Pool above must run before Execute payouts so the employee has a SPP note to claim."
+            className={cn(
+              "rounded-lg px-4 py-2 text-sm font-medium transition-colors",
+              "cursor-not-allowed bg-slate-700 text-slate-400",
+            )}
+          >
+            Deposit pool first
+          </button>
         ) : step ? (
           <button
             type="button"
