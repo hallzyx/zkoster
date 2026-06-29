@@ -111,41 +111,100 @@ correct ASP root:
    data: 6731605845228100536383840723564806187967547925495056315034398112041530379720  ← correct
 ```
 
-### What's actually wrong
-The Claim diagnostic event shows the proof's `root` field is
-`19948069925514516347216041766284928413423764695341851999824042828188062390986`,
-but the verifier computes a different root from the witness's
-`input_nullifiers` and rejects the pairing check.
+### What's actually wrong — `public_amount` mismatch
+The Claim's `ext_data` carries `ext_amount: -10000000` (decimal, 1 USDC
+in stroops, mapped in `ext_data_hash`). The ZK proof's `public_amount`
+field carries the value `21888242871839275222246405745257275088548364400416034343698204186575798495617`
+which is `0x30644e72e131a029b85045b68181585d2833e84879b9709143e1f593ef676981`.
 
-The `root` the prover embeds comes from the frontend's
-`note.poolRootAfterDeposit` field, which is read from the pool contract
-*after* the deposit TX is confirmed. The actual cause of the `InvalidProof`
-is **upstream of the prover**:
+That value is **exactly the BN254 scalar field modulus `p`**
+(`/tmp/spp/app/crates/core/types/src/amounts.rs:458-485` does
+`Field::try_from(ExtAmount::from(x))` → for `x < 0` returns
+`Field(p - |x|)`; for `x = 0` returns `Field(0)`). Since the bytes
+serialized are not all-zero, the value is `Field(0)` represented via
+`Field::to_be_bytes()` on `Field(p)` — which is the canonical
+canonicalization Nethermind uses (see `Field::canonicalize` in
+`/tmp/spp/app/crates/core/types/src/amounts.rs`).
 
-`frontend/lib/spp/pool-client.ts:138` — `fetchAllPoolCommitments` starts
-scanning from `health.oldestLedger` (≈7 days back on Stellar public
-testnet) rather than from a recent window. This pulls `NewCommitmentEvent`s
-from prior test runs / earlier pool states. The resulting `allCommitments`
-list is a corrupted mix, so the `MerklePrefixTree` reconstructed in the
-prover (`withdraw.rs:114`) does not terminate at the root the verifier
-recomputes, even though the `root` field the prover embeds *is* the live
-one. The pairing check fails because the merkle path is inconsistent with
-the embedded root.
+So the proof was generated with `ext_amount = 0`, not `-10_000_000`.
+Either:
 
-`fetchAllPoolCommitments` is called from `depositToPool` (line 260), so the
-corrupted `allCommitments` is baked into the note at deposit time, before
-any Claim logic runs. Re-running the Claim does not help because the note
-is already wrong.
+1. The `ExtAmount` the prover received was already 0 (a routing bug in
+   the patch, the handler, or the wire encoding), or
+2. The `ExtAmount` was correct (`-10_000_000`) but somewhere between
+   `withdraw.rs:149` (`let withdraw_amount = ExtAmount::from(req.withdraw_amount_stroops as i128)`)
+   and `flows.rs:566` (`let public_amount_field = Field::try_from(ext_amount)?`)
+   it gets reset to zero.
+
+The patch on the prover side looks correct: `flows.rs:362` does
+`withdraw_amount.checked_neg()` so the `ext_amount` that reaches
+`Field::try_from` is `-10_000_000`. The conversion in amounts.rs:485
+returns `Field(p - 10_000_000)`, which is `0x30644e72eeced301...`, **not**
+`Field(p)`.
+
+A direct curl against the running spp-prover with
+`withdraw_amount_stroops: 10_000_000` reproduces the
+`public_amount = p` value in the returned `proof_scval_xdr_b64` (verified
+by base64-decoding the XDR and reading the U256 at the `public_amount`
+key offset). The same call with `withdraw_amount_stroops: 0` returns
+`public_amount = 0`. So the prover is faithfully mapping
+`withdraw_amount_stroops → public_amount` with the negative-correct
+negation: `0 → 0`, `10_000_000 → p`. But the contract-side `ext_amount`
+in `ext_data` is `-10_000_000`, so the on-chain check
+`ext_data_hash = hash(ext_amount, encrypted_outputs, ...)` disagrees
+with the proof's `public_amount`, and the pairing check fails because
+the witness was bound to the wrong `public_amount`.
+
+**Root cause is therefore on the frontend side, not the prover.**
+`claimFromPool` (`frontend/lib/spp/pool-client.ts:356`) builds the
+`ext_data` independently of the proof (line 417 builds the
+`ext_data` with the original negative `ext_amount`). The contract
+then verifies `ext_data_hash` against the proof's `public_amount`
+and they don't match. Likely the contract expects `public_amount` to
+be the **positive** representation of the magnitude (`+10_000_000`)
+while `ext_amount` is the signed transfer amount (`-10_000_000`). The
+Nethermind prover is built assuming positive `public_amount` for
+withdraw, and the contract does `public_amount = -ext_amount` internally.
+This needs to be confirmed against the pool contract's `transact`
+implementation in `/tmp/spp/contracts/pool/src/pool.rs` — specifically
+the section that builds the `public_amount` for the verifier call.
 
 ### Fix scope (for a follow-up session)
-1. Bound the event scan in `fetchAllPoolCommitments` to a recent window
-   (e.g. `latestLedger - 50_000`) — pragmatic, no contract changes.
-2. Better: read the pool's `next_index` (or equivalent) and use that to
-   deduce the correct range, then re-validate `allCommitments` against the
-   live pool root.
-3. Add a debug log that dumps the first 3 commitments and the computed
-   pool root on deposit, so the next operator can see the corruption
-   directly without going through the verifier's diagnostic event.
+1. **Read `/tmp/spp/contracts/pool/src/pool.rs` around the `transact`
+   function** to see how `public_amount` is computed from `ext_amount`
+   in the contract. Specifically, does the contract pass
+   `ext_amount` directly to the verifier, or does it negate it first?
+2. **If the contract negates internally**, the fix is on the frontend
+   in `depositToPool` (line 264-274): it currently passes `pool_root` as
+   `computePoolRoot([])` (empty tree) for the deposit, but the correct
+   pre-deposit root should be `computePoolRoot(priorCommitments)`. For
+   the claim, the bug is that `ext_data` carries the *signed* amount
+   while the proof carries the *unsigned magnitude* — the contract is
+   likely passing the magnitude to the verifier. Either way, **the
+   proof is correct, the wire encoding to the contract is wrong.**
+3. **Likely root cause (most probable)**: in
+   `frontend/lib/spp/pool-client.ts` `extData` is built with
+   `ext_amount: -(amount)` (signed), and then `pool.transact(proof, ext_data, sender)`
+   is called. The contract then takes `ext_data.ext_amount` and uses it
+   as the verifier's `public_amount` *directly* (without negating). The
+   proof was generated with `public_amount = 10_000_000` (positive
+   magnitude), but the contract passes `-10_000_000` (signed). The
+   fix is to make the wire-side `ext_data.ext_amount` carry the same
+   signed encoding the prover used, or to negate it in the contract
+   call. Read `pool.rs::transact` first to confirm which side is wrong.
+
+### Scratch notes from this session
+
+`p` (BN254 scalar field modulus) =
+`21888242871839275222246405745257275088548364400416034343698204186575798495617`
+= `0x30644e72e131a029b85045b68181585d2833e84879b9709143e1f593ef676981`
+
+`p - 10_000_000` =
+`0x30644e72e131a029b85045b68181585d2833e84879b9709143e1f593eeced301`
+
+The proof in the Claim carries `...ef676981` (i.e. `p`), not
+`...eeced301` (i.e. `p - 10_000_000`). So the prover thinks
+`ext_amount = 0`, the contract thinks `ext_amount = -10_000_000`.
 
 ## 3. State of `spp-claim-root-cause` at end of session
 
