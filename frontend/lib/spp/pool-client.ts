@@ -17,7 +17,7 @@ import {
   xdr,
 } from "@stellar/stellar-sdk";
 
-import { DEMO_POOL, PROVER_BASE_URL, TESTNET_PASSPHRASE, TESTNET_RPC } from "./config";
+import { DEMO_POOL, PROVER_BASE_URL, SPP_CONTRACTS, TESTNET_PASSPHRASE, TESTNET_RPC } from "./config";
 import type { SppClaimResult, SppDepositResult, SppNote } from "./types";
 
 // ---------------------------------------------------------------------------
@@ -191,20 +191,38 @@ async function fetchAllPoolCommitments(
   return results.sort((a, b) => a.index - b.index);
 }
 
-/** Read the pool's current Merkle root from the chain (get_root view fn → U256 → BE hex 32B). */
-async function readPoolRoot(server: rpc.Server, poolContract: string): Promise<string> {
+/** Read a contract's get_root() view fn → U256 → BE hex 32B. */
+async function readRootByName(
+  server: rpc.Server,
+  contractId: string,
+  rootName: "get_root",
+): Promise<string> {
   const source = new Account(Keypair.random().publicKey(), "0");
   const tx = new TransactionBuilder(source, { fee: BASE_FEE, networkPassphrase: TESTNET_PASSPHRASE })
-    .addOperation(new Contract(poolContract).call("get_root"))
+    .addOperation(new Contract(contractId).call(rootName))
     .setTimeout(30)
     .build();
   const sim = await server.simulateTransaction(tx);
-  if (rpc.Api.isSimulationError(sim)) throw new Error(`get_root failed: ${sim.error}`);
-  if (!sim.result) throw new Error("get_root: no result");
+  if (rpc.Api.isSimulationError(sim)) throw new Error(`${rootName} failed: ${sim.error}`);
+  if (!sim.result) throw new Error(`${rootName}: no result`);
   const raw = scValToNative(sim.result.retval) as bigint;
   // U256 → 32-byte BE hex
-  const hex = raw.toString(16).padStart(64, "0");
-  return hex;
+  return raw.toString(16).padStart(64, "0");
+}
+
+/** Read the pool's current Merkle root from the chain. */
+async function readPoolRoot(server: rpc.Server, poolContract: string): Promise<string> {
+  return readRootByName(server, poolContract, "get_root");
+}
+
+/** Read the ASP membership contract's current root from the chain.
+ *  The Nethermind verifier checks this root against the proof's declared
+ *  root, so the prover MUST receive the live value. */
+async function readAspMembershipRoot(
+  server: rpc.Server,
+  aspMembershipContract: string,
+): Promise<string> {
+  return readRootByName(server, aspMembershipContract, "get_root");
 }
 
 // ---------------------------------------------------------------------------
@@ -245,10 +263,16 @@ export async function depositToPool(
 
   const poolRoot = await computePoolRoot([]);
   const aspNonMembershipRoot = ZERO_ROOT_HEX;
+  // Read the live ASP membership root from chain so the prover can force it
+  // onto the proof. Required because the prover's precomputed membership_proof
+  // (1 demo leaf at index 0) won't match the authoritative root once the pool
+  // has been initialized with the real depositor leaf.
+  const aspMembershipRoot = await readAspMembershipRoot(server, SPP_CONTRACTS.aspMembership);
 
   const proverReq = {
     amount_stroops: Number(amount),
     pool_root: poolRoot,
+    asp_membership_root: aspMembershipRoot,
     asp_non_membership_root: aspNonMembershipRoot,
     pool_address: poolContract,
     recipient_stellar_address: recipientStellarAddress,
@@ -349,10 +373,16 @@ export async function claimFromPool(
   const poolRoot = note.poolRootAfterDeposit
     ?? await readPoolRoot(claimServer, poolContract);
   const aspNonMembershipRoot = ZERO_ROOT_HEX;
+  // Read the live ASP membership root from chain so the prover can force it
+  // onto the proof. Required because the prover's precomputed membership_proof
+  // (1 demo leaf at index 0) won't match the authoritative root once the pool
+  // has been initialized with the real depositor leaf.
+  const aspMembershipRoot = await readAspMembershipRoot(claimServer, SPP_CONTRACTS.aspMembership);
 
   const proverReq = {
     withdraw_amount_stroops: note.amount,
     pool_root: poolRoot,
+    asp_membership_root: aspMembershipRoot,
     asp_non_membership_root: aspNonMembershipRoot,
     withdraw_recipient: recipientKeypair.publicKey(),
     input_note: {
