@@ -596,3 +596,62 @@ The Zkoster-side SPP Claim fix is still complete and validated
 with one caveat"). The remaining E2E claim requires fixing the
 `chainReviewBatchFromRows` `total_commitment` serialization in
 the frontend.
+
+### Root cause of the approve failure — narrowed further
+
+Direct reads of the on-chain payout state for batch 36 reveal that
+**both payouts 21 and 22 have the SAME `amount_commitment`**:
+
+```
+payout_id=21: amount_commitment=2d3e0aee...045c7ce
+payout_id=22: amount_commitment=2d3e0aee...045c7ce
+total_commitment (in get_batch): 2d3e0aee...045c7ce
+```
+
+So the verifier received 2 copies of the same commitment plus
+a `total_commitment` equal to one copy, and the sum
+`2 × commit + (−total) = commit ≠ identity` — hence `check_commitment_sum
+returns false`.
+
+The duplicate-payout / duplicate-commitment outcome is the
+result of the `writeContract` retry loop on `add_payout` having
+mand'd the same logical operation twice (once with the original
+sequence number, once with a new sequence number after
+"lost-in-mempool"). The on-chain contract's `add_payout` is not
+idempotent — it always increments `employee_count` and stores a
+new payout under a fresh `payout_id`, so two successful `add_payout`
+invocations of the same `(batch_id, employee, amount_commitment)`
+triple produce two distinct payout entries with identical
+commitments. The "duplicate wallet" pre-flight check in
+`createBatchWithRowsAction` (line 394) only catches duplicates in
+the input payload, not duplicates produced by the multi-step
+review flow re-running.
+
+### What's still correct
+
+* The ZKash prover (`/prover/target/release/zkoster-prover.exe`,
+  port 8787) generates valid commitments and proofs for distinct
+  amounts. When the test was rerun directly with `amounts=[1000000]`
+  for one row, the prover returned the correct shape:
+  `total_commitment` and `payouts[0].commitment` are equal (because
+  the sum of one row IS the row), and the sum check would pass for
+  a single-payout batch.
+* The SPP fix (commit `bbc31a0`, `4d1c8fa`, etc.) is complete and
+  independent of the approve failure.
+
+### Required fix for full E2E
+
+1. Add idempotency to `add_payout` in
+   `contracts/payroll/src/contract.rs`: either a `require!` that
+   `(batch_id, employee)` is not already present, or an `Option` for
+   the payout id keyed by `(batch_id, employee)`. The simplest
+   version: before the `let payout_id = storage::next_payout_id(...)`
+   call, check `storage::has_employee_payout(&employee)` (or add a
+   similar storage helper) and either no-op or return an
+   `EmployeeAlreadyInBatch` error.
+2. Tighten the `writeContract` retry: when polling loses a TX,
+   check whether the original sequence number has been consumed
+   (via `getAccount`) before re-manding with a new one. If the
+   original seqnum was consumed, the TX was applied and no retry
+   is needed.
+3. Re-run a fresh batch E2E with these two changes.
