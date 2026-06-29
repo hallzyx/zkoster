@@ -1,13 +1,14 @@
 # Handoff — ZKash (Confidential Settlement / hidden-amount payouts)
 
-> **Status:** PR1 (backend) DONE & merged to main; redeploy + PR2 (frontend) pending.
+> **Status:** PR1 (backend) DONE & merged to main (`433c610`); T-07 redeploy + PR2 (frontend) still pending.
 > **Component name:** **ZKash** (ZK + cash) — flagship confidential-amount layer.
 > **Goal:** Hide each employee's payout **amount** on-chain, so only the employee (with their key) and an authorized auditor (with a disclosure grant + viewing key) can read it.
 > **SDD change name:** `confidential-settlement` · artifacts in Engram (see "Recovery" below).
+> **Relationship to SPP:** the SPP USDC value-transfer rail (`spp-transfer` + `spp-native-prover`) is **DONE** — see `CONFIDENTIAL_USDC_SETTLEMENT_HANDOFF.md`. ZKash (this doc) is a separate, complementary layer that hides the *amount* rather than the *payer/payee relationship*. Both layers are independent and additive.
 
 ---
 
-## 0. Progress / Milestone (updated 2026-06-26)
+## 0. Progress / Milestone (updated 2026-06-29)
 
 **PR1 — backend — DONE, committed `433c610`, pushed to main.** ✅
 - `prover/src/zkash.rs` — full ECIES module (encrypt + employee/auditor decrypt) over ark-bn254 (ChaCha20Poly1305 + SHA256 KDF). cargo round-trip + tamper tests pass.

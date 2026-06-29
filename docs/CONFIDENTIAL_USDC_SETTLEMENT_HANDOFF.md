@@ -1,85 +1,111 @@
-# Handoff — Confidential USDC Settlement (value-transfer rail)
+# Handoff — SPP / Confidential USDC Settlement
 
-> **Status:** PLANNED — checkpoint only, NOT started. Pick up here after ZKash PR2 + testnet redeploy land.
-> **Component:** the **value-transfer rail** that sits at the FINAL settlement step, on top of ZKash.
-> **Goal:** at settlement, move **real USDC on testnet** to the employee with the **amount hidden on the public ledger** — not a toy token. This is the "cover the whole payment" capability.
-> **Why it matters (business):** this is the go-to-market differentiator for selling to **LATAM companies**, NOT a hackathon deliverable. Companies need to see real, confidential USDC movement end-to-end. Hackathon deadline (Jul 3, 2026) is a milestone, not the ceiling.
+> **Status:** DONE — shipped as two SDD changes: `spp-transfer` + `spp-native-prover`.
+> **Branch:** `feat/spp-transfer` → merged to `main` (2026-06-28/29).
+> **What it does:** moves real USDC through Stellar Private Payments (SPP) so deposit and claim are unlinkable on-chain. The company is not visible as the payer from the employee's perspective on the public ledger.
 
 ---
 
-## 0. Relationship to ZKash (read this first — it kills the "rewrite everything" fear)
+## 0. What was built
 
-This is **ADDITIVE**, not a rewrite. The layers are sequential and independent:
+### Layer map
 
 | Layer | What it hides | Status |
 |---|---|---|
-| **ZKash** (Pedersen + ECIES) | the **recorded** amount (commitment + ciphertext) | DONE (backend `433c610`) |
-| **This rail** (confidential USDC) | the **moved** amount (real value transfer on-chain) | PLANNED |
+| **ZKash** (Pedersen + ECIES) | the recorded amount (commitment + ciphertext) | PR1 done; PR2 pending — see `CONFIDENTIAL_SETTLEMENT_HANDOFF.md` |
+| **SPP USDC rail** (this doc) | the payer → payee relationship (deposit and claim are unlinkable) | **DONE** |
 
-The bridge between them is **one field**: `Payout.tx_ref` (`BytesN<32>`) in `contracts/payroll/src/contract.rs:209`. Today `execute_payout` verifies the range proof, marks `Paid`, and stores `tx_ref` — **no value moves** (confirmed: zero `transfer`/`TokenClient`/SAC code in `contracts/payroll/src`). This rail fills that hole. **ZKash is not touched.**
+### Architecture (protocol-bridge pattern)
 
----
+Three layers, each independent:
 
-## 1. ⚠️ TASK #0 — resolve the contradiction BEFORE any code
+1. **zkoster-payroll contract** — stores a 32-byte `spp_deposit_ref` per batch as tamper-evident on-chain anchor. Added two new admin functions: `set_spp_pool` (config) and `record_spp_deposit` (per-batch anchor).
+2. **SPP pool contract** — standard Nethermind SPP pool (`CALWH3FK…`), deployed and bound to the USDC SAC. Never called by the payroll contract directly — the frontend bridges them.
+3. **spp-prover** (Rust / Axum, port 8788) — standalone HTTP server that generates real Groth16 proofs for SPP deposit and withdraw using `PolicyTransaction(2,2,1,1,10,10)` circuit. Output: 256-byte proof + public inputs, ready for the pool contract.
 
-Our own prior research and recent press disagree. Do not build until this is settled with primary sources (Stellar docs / CAPs / SEPs / actual repos), not hype articles:
+### Key contracts / addresses (Stellar testnet)
 
-- **Prior handoff (our research, Jun 2026):** "True Confidential Tokens / Confidential Transfers do NOT exist on Stellar yet. The Confidential Token Association (SDF + OpenZeppelin + Zama) is a standards body — no CAP, no SEP, no implementation." (`CONFIDENTIAL_SETTLEMENT_HANDOFF.md` §1)
-- **Recent press (Jan–Feb 2026):** claims Confidential Tokens / Stellar Private Payments are "live on mainnet", open-sourced by Nethermind (Groth16/Circom, association sets), code available.
+| Resource | Address / ID |
+|---|---|
+| SPP USDC pool (active) | `CALWH3FKYAEVI4HMLWTMLFRVJSQ45ZGIQYQR32PX6BONK2YSKACZ5IWL` |
+| USDC SAC (Circle testnet) | `CBIELTK6YBZJU5UP2WWQEUCYKLPU6AUNZ2BQ4WWFEIE3USCIHMXQDAMA` |
+| USDC issuer | `GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5` |
+| ASP membership tree | `CBTOY7I7SERRSAOTUAY7CAMHZZBZS2MYOUQUAW7BE6L3SOA7T3NCHCUU` |
+| ASP non-membership SMT | `CC3VYWSZBIQCBDXP2XXQIY22CUKBQSYDMU7ER4POXMVDATLZRRYJGFET` |
+| Circom Groth16 verifier | `CBKOZTEYI5RAGSUKWAQEC4V6MRYDC4KL2D3PRPKMLWHTMXMFSCBVUJXX` |
+| Previous pool (XLM, retired) | `CBHXAGR6CLDIGT6MR42EXWDI2XHD6RZRVTCZZWHVMRBYYSGCQW5O4ORM` |
 
-**Resolve:** Is there a usable, deployable **confidential USDC** path on testnet TODAY?
-1. A shipped Confidential Token standard/SEP + reference contract, OR
-2. Stellar Private Payments (SPP) as a deployable pool we can settle through, OR
-3. Neither is turnkey → we build the rail ourselves on BN254/Groth16 bricks.
+### Amount encoding
 
-The answer decides the whole architecture below. **Verify in primary sources first.**
-
----
-
-## 2. The mechanism the user wants (validated mental model)
-
-Shield → confidential transfer → unshield. Key correction baked in: **the amount does NOT change — it is the SAME value, hidden, not transformed into a different number.**
-
-1. **Shield (deposit):** company deposits the USDC lump sum into the confidential rail → balance becomes encrypted/committed on-chain.
-2. **Confidential transfer:** per-employee transfer of the private balance. Ledger shows a ZK transaction occurred; the amount stays encrypted. Bound to the ZKash `enc_amt` / commitment so the moved value matches the recorded one.
-3. **Unshield (withdraw):** employee withdraws and gets normal, spendable USDC.
+UI display units where 1000 = 1 USDC. Conversion to stroops: `stroops = display_units × 10_000` (USDC has 7 decimals on Stellar: 1 USDC = 10 000 000 stroops).
 
 ---
 
-## 3. Two paths (decision pending on Task #0)
+## 1. Flow (end-to-end)
 
-| Path | What it is | Pro | Con / risk |
-|---|---|---|---|
-| **A. Integrate SPP / a confidential-token reference** | settle through an existing confidential rail (Nethermind SPP / OZ confidential token) | "real", credible to enterprises; standards-aligned | **other crypto stack** (Circom/Groth16 pool + Merkle association sets); UTXO-shaped vs our balance model; integration risk; maturity/audit unknown |
-| **B. Own minimal confidential USDC rail** | a small Soroban contract: shield USDC (SAC), confidential balance, transfer, unshield — reusing our BN254 primitives | full control; reuses what the prover already dominates; fits our balance model | we own the crypto correctness; "production-grade" claim is weaker without audit |
+```
+Admin portal                  spp-prover (:8788)        Testnet
+───────────────────────────── ─────────────────────────  ──────────────────────
+1. Execute payouts          → verifies Groth16 range     payroll.execute_payout()
+2. Deposit to Privacy Pool  → POST /deposit              pool.transact(deposit_proof)
+                               real Groth16 proof         → USDC leaves admin wallet
+                               note stored in IndexedDB   → spp_deposit_ref anchored
+3. Employee: Claim          → POST /withdraw             pool.transact(withdraw_proof)
+                               real Groth16 proof         → USDC arrives at employee
+                               note consumed               wallet (source = pool, not admin)
+```
 
-**User's intent:** real USDC, sell the power of covering everything → leans toward a path that is **credible and real**, not a toy. If Task #0 finds a usable turnkey confidential token → **Path A**. If not → **Path B** as a genuine (but unaudited) own rail, documented honestly.
+The deposit and claim transactions have **no on-chain link**. A blockchain observer sees:
+- Admin wallet → pool contract (USDC in)
+- Pool contract → employee wallet (USDC out)
 
-**Note from prior research:** we previously rejected SPP for payroll because it is UTXO-shaped (wrong for balance-based payroll) and WIP/unaudited. Re-validate that judgment in Task #0 — it may have changed.
+They cannot determine these two txs belong to the same payroll batch without the note (which lives only in the browser's IndexedDB, never on-chain).
 
 ---
 
-## 4. Honest constraints
+## 2. Key files
 
-- **USDC on testnet** = a SAC (Stellar Asset Contract). A plain `transfer` exposes amount + asset publicly. Hiding it requires the confidential rail to hold the balance, NOT a raw SAC transfer at the visible step.
-- **Amount↔commitment binding** (existing gap, see CLAUDE.md "Still pending"): the range proof binds to a field commitment, not the EC Pedersen point. A real confidential settlement should bind the moved amount to the ZKash commitment, or the two layers can disagree. This is the sharpest correctness unknown.
-- **Deposit reveal:** the lump-sum company deposit is an aggregate (already matches the public `total_commitment`) — acceptable to reveal. Individual salaries must stay hidden through the transfer step.
+| File | Role |
+|---|---|
+| `frontend/lib/spp/pool-client.ts` | deposit + claim logic; talks to spp-prover; polls tx confirmation |
+| `frontend/lib/spp/config.ts` | pool addresses, DEMO_POOL, PROVER_BASE_URL |
+| `frontend/lib/spp/notes.ts` | SppNote type; IndexedDB persistence |
+| `frontend/app/admin/batches/[id]/_components/SppDepositStep.tsx` | admin UI for deposit |
+| `frontend/app/employee/ClaimFromPool.tsx` | employee UI for claim |
+| `frontend/app/admin/actions.ts` | `depositToPrivacyPoolAction` (amount conversion + deposit call) |
+| `frontend/app/employee/actions.ts` | `claimPayoutFromPool` |
+| `spp-prover/src/routes/deposit.rs` | `/deposit` handler — Groth16 deposit proof |
+| `spp-prover/src/routes/withdraw.rs` | `/withdraw` handler — Groth16 withdraw proof |
+| `contracts/payroll/src/contract.rs` | `set_spp_pool` + `record_spp_deposit` |
 
 ---
 
-## 5. Next-session checklist (start here)
+## 3. Running the prover
 
-- [ ] **Task #0** — verify in PRIMARY sources whether confidential USDC is deployable on testnet today (CAP/SEP/repo, not press). Decide Path A vs B.
-- [ ] Confirm whether SPP is still UTXO-shaped / unaudited, or has matured to fit balance-based payroll.
-- [ ] Design the **shield/transfer/unshield** flow and where it hooks `execute_payout` (`tx_ref` → real confidential settlement ref).
-- [ ] Decide how the moved amount **binds** to the existing ZKash `enc_amt` / Pedersen commitment.
-- [ ] Only then: `sdd-new confidential-usdc-settlement` (explore → propose). This is a NEW SDD change, separate from `confidential-settlement` (ZKash).
+```bash
+cd spp-prover
+cargo run --release -- serve   # listens on :8788
+# or: cargo run --release -- gen  (CLI mode for one-shot proof)
+```
 
-## 6. Prerequisites (must land first)
+Health check: `curl http://127.0.0.1:8788/health` → `{"status":"ok"}`.
 
-- ZKash **PR2 (frontend)** + **T-07 testnet redeploy** from `CONFIDENTIAL_SETTLEMENT_HANDOFF.md` must be done — this rail builds on the redeployed schema.
+The dev server (`npm run dev` in `frontend/`) reads `PROVER_BASE_URL` from `process.env.SPP_PROVER_URL` or defaults to `http://127.0.0.1:8788`.
 
-## 7. Recovery (Engram, project `zkoster`)
+---
 
-- Checkpoint: `project/confidential-usdc-settlement-checkpoint`
-- Predecessor: `sdd/confidential-settlement/*` (ZKash) and `CONFIDENTIAL_SETTLEMENT_HANDOFF.md`
+## 4. Known limitations / next steps
+
+- **Note persistence is browser-local (IndexedDB).** If the employee clears their browser storage before claiming, the note is lost and the USDC is stuck in the pool. For production, notes should be encrypted and backed up server-side or in a user-controlled key store.
+- **ASP trees are empty** (depth-10 Poseidon2 empty tree). For production, real association set membership (KYC allowlist, sanctions denylist) must be committed to the on-chain ASP roots.
+- **Amount ↔ commitment binding gap** (inherited, not introduced here): the Groth16 range proof binds to a field commitment, not the EC Pedersen point. The SPP proof and the ZKash commitment are not cryptographically linked. Acceptable for hackathon demo; closing this requires an in-circuit EC opening (Noir rewrite — deferred).
+- **Single-note per batch.** The current deposit bundles the full batch total into one note. A production version would issue one note per employee to preserve unlinkability at the per-payout level.
+
+---
+
+## 5. Recovery (Engram, project `zkoster`)
+
+- `sdd/spp-transfer/*` — protocol-bridge design + tasks (T-01 … T-10, all complete)
+- `sdd/spp-native-prover/*` — Rust prover design + tasks (T-01 … T-06, all complete)
+- Bugfix memory: "T-06 SPP deposit+claim fixed: getEvents bugs + pre-deposit state pattern"
+- Bugfix memory: "SPP pool pays native XLM, not USDC (root cause of 'no USDC received')"
