@@ -93,7 +93,9 @@ includes `asp_membership_root`, no second frontend change is needed.
 ### NOT YET applied (the second half)
 
 The prover's route handlers need to accept and use that field. Apply both
-edits in the Nethermind SPP repo at `spp-prover/src/routes/`:
+edits in **zkoster** (NOT in Nethermind — Nethermind is a library with no
+HTTP layer; the HTTP routes live in zkoster's `spp-prover`):
+`spp-prover/src/routes/{deposit,withdraw}.rs`.
 
 **`deposit.rs`** — three small edits:
 
@@ -133,11 +135,14 @@ environment is required.
 
 ```bash
 # 1. Clone Nethermind SPP (the upstream Nethermind privacy pool repo).
-git clone https://github.com/NethermindEth/spp /opt/spp
+#    The handoff originally said NethermindEth/spp; the correct repo name
+#    is NethermindEth/stellar-private-payments (NethermindEth/spp 404s as
+#    of June 2026).
+git clone https://github.com/NethermindEth/stellar-private-payments /opt/spp
 
-# 2. Apply the four edits above to /opt/spp/prover/src/routes/{deposit,withdraw}.rs
-#    (paths inside the Nethermind repo; equivalent to this repo's
-#    spp-prover/src/routes/*.rs but in the Nethermind source tree).
+# 2. Apply the four edits above to zkoster's
+#    spp-prover/src/routes/{deposit,withdraw}.rs (NOT to the Nethermind
+#    checkout — Nethermind is a library and has no HTTP routes).
 
 # 3. Build Nethermind SPP — produces the prover lib + the WASM circuits.
 cd /opt/spp
@@ -147,8 +152,11 @@ cargo build --release
 
 # 4. Re-point this repo's spp-prover at the Nethermind libs.
 #    Edit spp-prover/Cargo.toml path dependencies from the
-#    C:/temp/spp/app/crates/core/* (or /tmp/spp/*) hardcoded paths to
-#    /opt/spp/app/crates/core/*.
+#    C:/temp/spp/app/crates/core/* hardcoded paths to
+#    /opt/spp/app/crates/core/*. NOTE: the [patch.crates-io]
+#    cranelift-control entry (line ~45) ALSO needs the same path fix;
+#    if you only fix the [dependencies] block, step 5 will fail at link
+#    time with a Windows-path error.
 
 # 5. Rebuild + restart the local prover.
 cd /path/to/zkoster/spp-prover
