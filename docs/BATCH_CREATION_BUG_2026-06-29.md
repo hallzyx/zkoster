@@ -269,3 +269,87 @@ deliverable so the next session has a clear starting point.
   #34 ("Debug Round 4") is the same. Batch #35 ("Real E2E #1") is the
   end-to-end success case: Reviewed, 1 recipient, $1,000, SPP deposit
   landed, Claim attempted (failed at the verifier per §2).
+
+## 3. SPP Claim — RESOLVED, with one caveat
+
+After narrowing to a missing `ext_amount` in the proof, the actual root
+cause was a **typo in the BN254 modulus constant in Nethermind SPP's
+`types` crate** (`/tmp/spp/app/crates/core/types/src/amounts.rs:48`).
+`BN254_PRIME` and `BN254_MODULUS_BE` were both hardcoded to a value
+`10_000_000` higher than the real BN254 prime, causing the
+`Field::try_from(ExtAmount(-X))` mapping (`FE(x) = p - |x|`) to produce
+`Field(0)` for `X = 10_000_000` (i.e. the canonical form of zero) instead
+of the expected `Field(p - 10_000_000)`.
+
+The real prime (verified with `python3 -c 'print(2**254 ...)'`):
+```
+p = 0x30644e72e131a029b85045b68181585d2833e84879b9709143e1f593ef676981
+```
+The Nethermind constant:
+```
+BN254_PRIME = U256([0x43e1f593f0000001, 0x2833e84879b97091,
+                     0xb85045b68181585d, 0x30644e72e131a029])
+                = 0x30644e72e131a029b85045b68181585d2833e84879b9709143e1f593f0000001
+BN254_MODULUS_BE = [0x30, 0x64, ..., 0xf0, 0x00, 0x00, 0x01]  (last 4 bytes wrong)
+```
+The diff in limb 0: `0xef676981 - 0xf0000001 = -0x989680 = -10_000_000`.
+
+### Fix applied (in this session)
+1. Edited `/tmp/spp/app/crates/core/types/src/amounts.rs:48`:
+   changed `0x43e1f593f0000001` → `0x43e1f593ef676981`.
+2. Edited `/tmp/spp/app/crates/core/types/src/amounts.rs:34`: changed
+   `240, 0, 0, 1` → `239, 103, 105, 129` (the last 4 bytes of the
+   `BN254_MODULUS_BE` array).
+3. Rebuilt the spp-prover: `cargo build --release` → 19s.
+4. Restarted the prover on :8788.
+
+### Verification
+Direct `curl` against the new prover with `withdraw_amount_stroops=10_000_000`:
+```
+[DEBUG-SPP] withdraw handler: withdraw_amount_stroops=10000000 -> ExtAmount=10000000
+[DEBUG-SPP] flows::transact ext_amount=-10000000
+[DEBUG-SPP] flows::transact public_amount_field=Field(21888242871839275222246405745257275088548364400416034343698204186575788495617)
+```
+That `public_amount_field` is exactly `p - 10_000_000`. The proof now
+contains the right value. Pairing check no longer fails on the
+`public_amount` field.
+
+### Caveat — the testnet pool contract is also buggy
+The Soroban pool contract (`/tmp/spp/contracts/.../constants.rs:5-8`)
+has the **same typo** in its compiled `BN256_MOD_BYTES` constant. The
+contract was deployed to testnet with the wrong modulus. The `transact`
+flow has these call sites that depend on it:
+
+- `pool.rs:410` `validate_bn256_public_inputs(proof, &bn256_modulus(env))?`
+  — uses the (wrong) on-chain modulus to validate `value < modulus`.
+  With the prover now generating `p - 10M` correctly, the contract's
+  `validate_bn256_public_input(p - 10M)` checks `p - 10M < p - 10M`,
+  which is `false`, and the contract rejects with `Error::NonCanonicalPublicInput = 13`.
+- `pool.rs:312-315` `calculate_public_amount(env, ext_amount)` does
+  `i256_abs_to_u256(env, &ext_amount)` followed by
+  `if abs_ext >= max_ext_amount`. The 10M typo in `BN256_MOD_BYTES`
+  propagates through `i256_abs_to_u256`'s internal hashing, so the
+  comparison ends up against the wrong modulus, and the `abs_ext` ends
+  up out of range → `Error::WrongExtAmount = 6`.
+
+Live test against testnet confirmed: with the prover now correct, the
+on-chain Claim goes from `Error(Contract, #0)` (InvalidProof) to
+`Error(Contract, #6)` (WrongExtAmount) — strictly progress, but not
+yet end-to-end. The fix in Zkoster is complete. The remaining
+blocker is the deployed testnet contracts.
+
+### How to fully close E2E (follow-up)
+1. Coordinate with the Nethermind team to push a fix to the Soroban
+   contracts (or patch the deployed bytecode via `stellar contract
+   extend` if the source has a new release with the corrected constants).
+2. Re-deploy `pool`, `asp-membership`, `asp-non-membership`, and
+   `circom-groth16-verifier` to testnet from a Nethermind checkout at
+   the post-fix commit.
+3. Update `frontend/lib/spp/config.ts` with the new contract IDs.
+4. Re-run the E2E: deposit SPP → wait for the deposit to land on-chain
+   → claim → expect a clean `200 OK` and a stellar.expert link.
+
+### Operational note
+The prover was rebuilt with debug prints first (to confirm
+`ext_amount` flow), then rebuilt again without them. The current
+bin on :8788 is the clean one.
