@@ -25,9 +25,13 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 # SPP core path deps — isolated workspace, never merged into zkoster root Cargo.toml
-prover     = { path = "C:/temp/spp/app/crates/core/prover" }
-witness    = { path = "C:/temp/spp/app/crates/core/witness" }
-types      = { path = "C:/temp/spp/app/crates/core/types" }
+# Repointed from C:/temp/spp/... to /tmp/spp/... (Linux rebuild — circuits build.rs
+# overflows the stack on Windows/WSL2 cargo 1.96). The handoff doc suggests /opt/spp
+# but /opt is root-owned in this env, so we use /tmp/spp. See
+# docs/SPP_CLAIM_HANDOFF.md §5 step 4.
+prover     = { path = "/tmp/spp/app/crates/core/prover" }
+witness    = { path = "/tmp/spp/app/crates/core/witness" }
+types      = { path = "/tmp/spp/app/crates/core/types" }
 
 # ScVal encoding (mirrors SPP's stellar crate deps, minus the full stellar client)
 stellar-xdr = { version = "26.0.0", features = ["curr", "serde", "std"] }
@@ -41,5 +45,7 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 
 # Required because wasmer/cranelift inside SPP uses a patched cranelift-control.
 # Patches must appear in the root workspace Cargo.toml of the crate being built.
+# Repointed from C:/temp/spp/vendor/cranelift-control to /tmp/spp/vendor/cranelift-control
+# (same reason as the path deps above; see comment on prover/witness/types).
 [patch.crates-io]
-cranelift-control = { path = "C:/temp/spp/vendor/cranelift-control" }
+cranelift-control = { path = "/tmp/spp/vendor/cranelift-control" }

@@ -36,6 +36,12 @@ pub struct WithdrawRequest {
     pub withdraw_amount_stroops: u64,
     /// Current pool Merkle root (BE hex 32B). Read from on-chain after deposit.
     pub pool_root: String,
+    /// ASP membership Merkle root (BE hex 32B). Read from on-chain.
+    /// Overrides the precomputed `state.membership.proof.root` because the
+    /// single-leaf tree built at startup does not match the live root after
+    /// the pool has been initialized with real depositor leaves.
+    /// See docs/SPP_CLAIM_HANDOFF.md §3-§4.
+    pub asp_membership_root: String,
     /// ASP non-membership SMT root (BE hex 32B). From on-chain.
     pub asp_non_membership_root: String,
     /// Stellar address that will receive the withdrawn USDC.
@@ -77,6 +83,8 @@ async fn generate_withdraw_proof(
     tracing::info!(recipient = %req.withdraw_recipient, "withdraw request");
 
     let pool_root = parse_field_be_hex(&req.pool_root, "pool_root")?;
+    let asp_membership_root =
+        parse_field_be_hex(&req.asp_membership_root, "asp_membership_root")?;
     let asp_non_membership_root =
         parse_field_be_hex(&req.asp_non_membership_root, "asp_non_membership_root")?;
 
@@ -124,7 +132,10 @@ async fn generate_withdraw_proof(
     let depositor_pubkey =
         Field::try_from_le_bytes(pubkey_arr).map_err(|e| anyhow::anyhow!("{e}"))?;
 
-    let membership_proof = state.membership.proof.clone();
+    // Override the precomputed root with the live on-chain value.  See the
+    // matching comment in routes/deposit.rs and docs/SPP_CLAIM_HANDOFF.md §3.
+    let mut membership_proof = state.membership.proof.clone();
+    membership_proof.root = asp_membership_root;
 
     let non_membership_proof = AspNonMembershipProof {
         key: depositor_pubkey,

@@ -19,6 +19,12 @@ pub struct DepositRequest {
     pub amount_stroops: u64,
     /// Pool Merkle root — 32-byte hex string (big-endian).  From on-chain.
     pub pool_root: String,
+    /// ASP membership Merkle root — 32-byte hex string (big-endian).  From on-chain.
+    /// Overrides the precomputed `state.membership.proof.root` because the
+    /// single-leaf tree built at startup does not match the live root after
+    /// the pool has been initialized with real depositor leaves.
+    /// See docs/SPP_CLAIM_HANDOFF.md §3-§4.
+    pub asp_membership_root: String,
     /// ASP non-membership SMT root — 32-byte hex string (big-endian).  From on-chain.
     pub asp_non_membership_root: String,
     /// Pool contract address (recipient field of ExtData).
@@ -77,6 +83,8 @@ async fn generate_deposit_proof(
     // --- parse inputs ----------------------------------------------------------
     tracing::info!(recipient = %req.recipient_stellar_address, "deposit request");
     let pool_root = parse_field_be_hex(&req.pool_root, "pool_root")?;
+    let asp_membership_root =
+        parse_field_be_hex(&req.asp_membership_root, "asp_membership_root")?;
     let asp_non_membership_root =
         parse_field_be_hex(&req.asp_non_membership_root, "asp_non_membership_root")?;
 
@@ -94,7 +102,12 @@ async fn generate_deposit_proof(
     let out_blinding = generate_random_blinding()?;
 
     // --- build membership proofs -----------------------------------------------
-    let membership_proof = state.membership.proof.clone();
+    // Override the precomputed root with the live on-chain value.  The precomputed
+    // tree (single leaf, depth 10) is correct in path/leaf/blinding but its root
+    // does not match the pool's authoritative `asp_membership_root` once leaves
+    // have been inserted.  See docs/SPP_CLAIM_HANDOFF.md §3.
+    let mut membership_proof = state.membership.proof.clone();
+    membership_proof.root = asp_membership_root;
 
     // Non-membership proof against the empty SMT (root is on-chain).
     // The circuit requires key == depositor's note pubkey.
