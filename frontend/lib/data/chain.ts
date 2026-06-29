@@ -226,6 +226,7 @@ function decorateBatch(raw: RawBatch): Batch {
     employeeCount: raw.employee_count,
     settlementRef: meta?.settlementRef ?? null,
     sppDepositRef,
+    sppDepositTxRef: meta?.sppDepositTxRef ?? null,
   };
 }
 

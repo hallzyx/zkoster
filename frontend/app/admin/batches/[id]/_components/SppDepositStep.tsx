@@ -22,6 +22,10 @@ interface SppDepositStepProps {
   status: BatchStatus;
   /** Hex-encoded 32-byte SPP deposit ref already anchored on-chain, or null. */
   sppDepositRef: string | null;
+  /** Stellar tx hash of the deposit, persisted off-chain (null until deposit
+   * is performed and the page is re-rendered). Used to render a
+   * persistent Stellar Expert link. */
+  sppDepositTxRef: string | null;
   /** Batch total in UI display units (passed as-is to the pool action). */
   totalAmount: number;
 }
@@ -50,6 +54,7 @@ export function SppDepositStep({
   batchId,
   status,
   sppDepositRef,
+  sppDepositTxRef,
   totalAmount,
 }: SppDepositStepProps) {
   const [pending, startTransition] = useTransition();
@@ -66,14 +71,14 @@ export function SppDepositStep({
 
   if (!isFunded) return null;
 
-  // Determine effective deposit ref + tx hash: prefer the just-recorded result
-  // over the props so the UI updates immediately without waiting for a page
-  // refresh. The "tx hash" is only available from the local result — when
-  // reading from storage (sppDepositRef populated server-side), we don't have
-  // the tx hash on the read path, so we fall back to a static label.
+  // Determine effective deposit ref + tx hash. The ref comes from either the
+  // just-recorded local result or the persisted prop; the tx hash prefers the
+  // persisted prop (so the Stellar Expert link survives a page refresh) and
+  // falls back to the local result while the user is still looking at the
+  // freshly-deposited state.
   const effectiveRef =
     (result?.ok ? result.sppRef : null) ?? sppDepositRef;
-  const effectiveTxHash = result?.ok ? result.txHash : null;
+  const effectiveTxHash = sppDepositTxRef ?? (result?.ok ? result.txHash : null);
 
   function handleDeposit() {
     if (pending || effectiveRef) return;
@@ -147,11 +152,11 @@ export function SppDepositStep({
                 passphrase={PUBLIC_NETWORK_PASSPHRASE}
               />
             </span>
-          ) : (
+          ) : result?.ok ? (
             <span className="mt-0.5 text-xs text-slate-600">
-              Deposit tx recorded on-chain
+              Deposit tx recorded on-chain (link available after refresh)
             </span>
-          )}
+          ) : null}
         </div>
       )}
 
@@ -162,13 +167,28 @@ export function SppDepositStep({
         </div>
       )}
 
-      {/* Error notice */}
+      {/* Error notice — surfaces both the server action error and a manual
+          retry button. The writeContract helper already retries 5 times for
+          lost-mempool cases; this button is for the user to retry after a
+          persistent error (e.g. RPC fully down) without a full page refresh. */}
       {result && !result.ok && (
-        <div className="rounded-lg border border-red-800 bg-red-950/40 px-4 py-3 text-sm text-red-300">
-          {result.step ? (
-            <span className="font-medium text-red-400">[{result.step}] </span>
+        <div className="flex flex-col gap-2 rounded-lg border border-red-800 bg-red-950/40 px-4 py-3 text-sm text-red-300">
+          <div>
+            {result.step ? (
+              <span className="font-medium text-red-400">[{result.step}] </span>
+            ) : null}
+            {result.error}
+          </div>
+          {result.step !== "precondition" ? (
+            <button
+              type="button"
+              disabled={pending}
+              onClick={handleDeposit}
+              className="self-start rounded-md border border-red-700 px-3 py-1 text-xs font-medium text-red-200 transition-colors hover:bg-red-900/40 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {pending ? "Retrying…" : "Retry deposit"}
+            </button>
           ) : null}
-          {result.error}
         </div>
       )}
     </Card>

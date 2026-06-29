@@ -23,6 +23,7 @@ import {
   registerDynamicBatch,
   seedBatchById,
   setSppNoteForBatch,
+  updateDynamicBatch,
   DEMO_EMPLOYEE_WALLET,
 } from "@/lib/data/metadata";
 
@@ -267,6 +268,14 @@ export async function depositToPrivacyPoolAction(
       // the pool deposit is real so we continue successfully.
       if (!msg.includes("#5") && !msg.includes("InvalidBatchStatus")) throw anchorErr;
     }
+
+    // Persist the SPP deposit tx hash on the off-chain batch record so the
+    // Stellar Expert link survives the page refresh that wipes the local
+    // `result` state in SppDepositStep. No-op for static seed batches.
+    updateDynamicBatch(batchId, {
+      sppDepositRef: sppRef,
+      sppDepositTxRef: txHash,
+    });
 
     return { ok: true, txHash, sppRef };
   } catch (err) {
