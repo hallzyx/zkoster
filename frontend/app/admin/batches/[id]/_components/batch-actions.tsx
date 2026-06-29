@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useTransition } from "react";
+import { useEffect, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 
 import { Card } from "@/app/_components/ui";
@@ -74,6 +74,15 @@ export function BatchActions({ batchId, status, sppDepositRef }: BatchActionsPro
   const [result, setResult] = useState<ActionResult | null>(null);
   const router = useRouter();
 
+  // Reset the local result when the batch status changes — otherwise a
+  // success toast from a previous action (e.g. "Funded" → "Execute payouts")
+  // keeps the button stuck in "Refreshing…" even after the user navigates
+  // to a different state, because we only ever setResult, never clear it
+  // when the server data supersedes the local view.
+  useEffect(() => {
+    setResult(null);
+  }, [status]);
+
   const isTerminal = TERMINAL_STATUSES.includes(status);
   // Execute payouts requires a SPP deposit first — otherwise the employee
   // has no SPP note to claim and the privacy rail is skipped silently.
@@ -117,16 +126,20 @@ export function BatchActions({ batchId, status, sppDepositRef }: BatchActionsPro
         ) : step ? (
           <button
             type="button"
-            disabled={pending}
+            disabled={pending || (result?.ok ?? false)}
             onClick={handleClick}
             className={cn(
               "rounded-lg px-4 py-2 text-sm font-medium transition-colors",
-              pending
+              pending || result?.ok
                 ? "cursor-not-allowed bg-slate-700 text-slate-400"
                 : "bg-emerald-600 text-white hover:bg-emerald-500 active:bg-emerald-700",
             )}
           >
-            {pending ? "Working…" : step.label}
+            {pending
+              ? "Working…"
+              : result?.ok
+                ? "Refreshing…"
+                : step.label}
           </button>
         ) : null}
       </div>
