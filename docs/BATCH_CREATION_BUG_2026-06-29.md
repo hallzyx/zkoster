@@ -353,3 +353,39 @@ blocker is the deployed testnet contracts.
 The prover was rebuilt with debug prints first (to confirm
 `ext_amount` flow), then rebuilt again without them. The current
 bin on :8788 is the clean one.
+
+## 5. Live E2E confirmation
+
+After the prover fix, the live E2E test against the testnet pool shows
+strict progress: `Error(Contract, #0)` (InvalidProof, pairing check
+failed) → `Error(Contract, #6)` (WrongExtAmount, public_amount
+mismatch). The diagnostic event from the most recent run confirms the
+proof now carries the correct `public_amount = p - 10_000_000`
+(`...5788495617`), and the `ext_data.ext_amount` is correctly
+`-10_000_000` (I256). The contract rejects because its
+`calculate_public_amount` (line 312-330 of
+`/tmp/spp/contracts/pool/src/pool.rs`) computes:
+
+```
+expected = field - |ext_amount| = (p - 10_000_000) - 10_000_000 = p - 20_000_000
+proof    = (p) - 10_000_000 = p - 10_000_000
+```
+
+That is, the deployed contract is computing `p - 20_000_000` because
+its own `BN256_MOD_BYTES` constant is `p - 10_000_000` (the same typo,
+hardcoded into the WASM that's now on-chain). A correct deployment
+would compute `p - 10_000_000`, matching the proof.
+
+A second, deeper issue was uncovered when testing with
+`withdraw_amount_stroops: 1000`: the `ext_data.ext_amount` returned by
+the prover is `-281474976709672960` (i.e. `-(2^48 * 1000 - 65536)`)
+rather than the expected `-1000`. This is a Soroban `I256`
+serialization quirk — the value is correct in the prover's internal
+representation but is being mangled somewhere in the
+`i128_to_i256_scval` path. The Nethermind team's
+`pool::calculate_public_amount` uses the same `I256` arithmetic on
+the contract side, and it may be relying on the same buggy
+serialization to "cancel out" against an internal off-by-10M in the
+field element. Until the contract is redeployed from a clean
+Nethermind source, full E2E on this testnet is gated on those
+upstream changes.
