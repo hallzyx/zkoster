@@ -53,6 +53,13 @@ export interface SeedBatch {
   settlementRef: string | null;
   /** Hex-encoded BytesN<32> from record_spp_deposit. Set when the batch has been deposited into the SPP privacy pool. */
   sppDepositRef?: string | null;
+  /**
+   * Stellar tx hash of the SPP deposit (record_spp_deposit) — separate from
+   * sppDepositRef (the 32-byte note anchor). Persists in off-chain storage so
+   * the Stellar Expert link stays visible after the page refresh that wipes
+   * the local `result` state in SppDepositStep.
+   */
+  sppDepositTxRef?: string | null;
   amounts: number[];
   statuses: PayoutStatus[];
   /**
@@ -97,6 +104,24 @@ const _dynamicBatches: Map<number, SeedBatch> =
 /** Register a dynamically created batch in the in-memory off-chain store. */
 export function registerDynamicBatch(batchId: number, data: SeedBatch): void {
   _dynamicBatches.set(batchId, data);
+}
+
+/**
+ * Update a dynamically created batch in-place (mutates the existing SeedBatch).
+ * Used to persist SPP deposit metadata (tx hash, ref) AFTER the initial
+ * registerDynamicBatch call so the Stellar Expert link survives a page refresh.
+ *
+ * No-op if the batch was registered via the static seed array (i.e. seed
+ * batch created before the user-facing CSV flow) — those are immutable seeds.
+ */
+export function updateDynamicBatch(
+  batchId: number,
+  patch: Partial<SeedBatch>,
+): boolean {
+  const existing = _dynamicBatches.get(batchId);
+  if (!existing) return false;
+  Object.assign(existing, patch);
+  return true;
 }
 
 // ---------------------------------------------------------------------------

@@ -139,13 +139,27 @@ const zeroEncAmt: xdr.ScVal = xdr.ScVal.scvBytes(Buffer.alloc(40));
 
 const POLL_INTERVAL_MS = 2000;
 const MAX_POLLS = 60;
+/** Outer-attempt backoff when a TX is lost in the mempool (status === NOT_FOUND
+ * for the full MAX_POLLS window). The RPC accepted the TX (sendTransaction
+ * returned a hash) but the network never propagated it — usually transient
+ * testnet congestion. Re-manding the same call with a fresh sequence number
+ * is the cheapest recovery; we keep the visible delay small (8s) so the admin
+ * UI doesn't feel frozen. The outer attempt counter (5 max) bounds the total
+ * time even in the worst case. */
+const MEMPOOL_LOST_BACKOFF_MS = 8_000;
 
 /**
  * Build, sign, submit, and confirm a Soroban contract call.
  * - Fetches a fresh account sequence before every call (no race conditions).
  * - Polls getTransaction until SUCCESS, FAILED, or timeout.
+ * - On a lost-mempool TX (NOT_FOUND for the full polling window), backs off
+ *   briefly and re-mands the call with a new sequence number — the original
+ *   hash is abandoned (it's effectively gone). This makes the admin flow
+ *   robust to testnet congestion without surfacing transient RPC issues to
+ *   the user.
  * - Returns the confirmed transaction hash on success.
- * - Throws a descriptive error on FAILED or timeout.
+ * - Throws a descriptive error on FAILED or after all outer attempts are
+ *   exhausted.
  */
 export async function writeContract(
   contractId: string,
@@ -157,7 +171,9 @@ export async function writeContract(
   const server = new rpc.Server(cfg.rpcUrl);
   const kp: Keypair = roleKeypair(signerRole);
 
-  // Retry loop — handles txBadSeq (RPC lag) and TRY_AGAIN_LATER (mempool full).
+  // Retry loop — handles txBadSeq (RPC lag), TRY_AGAIN_LATER (mempool full),
+  // and lost-mempool (NOT_FOUND for the full poll window) by re-manding with
+  // a fresh sequence number on every attempt.
   for (let attempt = 0; attempt < 5; attempt++) {
     // 1. Fetch account with current sequence number.
     const account: Account = await server.getAccount(kp.publicKey());
@@ -201,6 +217,7 @@ export async function writeContract(
 
     // 6. Poll until confirmed.
     const hash = sent.hash;
+    let lostInMempool = true;
     for (let i = 0; i < MAX_POLLS; i++) {
       await new Promise((r) => setTimeout(r, POLL_INTERVAL_MS));
       const result = await server.getTransaction(hash);
@@ -218,9 +235,27 @@ export async function writeContract(
       }
       // status === NOT_FOUND — still being ingested; keep polling
     }
-    throw new Error(`Transaction timed out after ${MAX_POLLS} polls (hash: ${hash})`);
+    // Reached MAX_POLLS without ever leaving NOT_FOUND. This is the
+    // "lost in mempool" case. Log to stderr (for debugging) and continue
+    // to the next outer attempt with a fresh sequence number. The
+    // caller sees a normal SUCCESS/return if the retry lands.
+    if (lostInMempool) {
+      console.warn(
+        `[writeContract] ${method}: TX ${hash.slice(0, 12)}… lost in mempool ` +
+          `after ${MAX_POLLS} polls — retrying with new sequence number ` +
+          `(attempt ${attempt + 1}/5)`,
+      );
+      await new Promise((res) => setTimeout(res, MEMPOOL_LOST_BACKOFF_MS));
+      // Note: if the lost TX DOES land on-chain later, the second attempt
+      // will fail at sendTransaction with txBadSeq (the lost TX consumed
+      // a sequence number on the source account). The outer txBadSeq
+      // handler above will retry yet again, eventually settling once the
+      // account is in a consistent state.
+    }
   }
-  throw new Error(`writeContract: exhausted ${method} retries (txBadSeq)`);
+  throw new Error(
+    `writeContract: exhausted 5 outer attempts for ${method} (mempool congestion?)`,
+  );
 }
 
 // ---------------------------------------------------------------------------

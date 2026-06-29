@@ -74,6 +74,9 @@ export interface Batch {
   settlementRef: string | null;
   /** Hex-encoded 32-byte SPP deposit reference anchored on-chain, or null if no deposit yet. */
   sppDepositRef: string | null;
+  /** Stellar tx hash of the SPP deposit, persisted in off-chain storage so the
+   * Stellar Expert link survives a page refresh. Null until a deposit is made. */
+  sppDepositTxRef: string | null;
 }
 
 export interface Payout {

@@ -110,27 +110,40 @@ async function computePoolRoot(commitments: string[]): Promise<string> {
 
 /**
  * Fetch all commitments ever inserted into the pool via getEvents.
- * Returns sorted by index — this gives the correct allCommitments list for Merkle path proofs.
+ * Returns sorted by index — this gives the correct allCommitments list for
+ * Merkle path proofs during withdraw.
  *
  * NewCommitmentEvent has #[topic] on `commitment`, so the filter topic is:
  *   [Symbol("NewCommitmentEvent"), <wildcard>]
  * and the event value holds { index: u32, encrypted_output: Bytes }.
+ *
+ * Retention: we paginate from `oldestLedger` (the RPC retention window, ~7 days
+ * on Stellar public testnet) rather than `latestLedger - 10000`. The earlier
+ * 10k-ledger shortcut misses deposits older than ~14h, which causes the prover
+ * to compute a Merkle path against an incomplete allCommitments list — the
+ * resulting root doesn't match the pool's authoritative get_root() and the
+ * Nethermind verifier rejects the proof with Error(Contract, #0).
+ *
+ * The pool is the only contract emitting NewCommitmentEvent in our app, so
+ * scanning the full retention window is cheap in practice (a few pages of 200).
  */
 async function fetchAllPoolCommitments(
   server: rpc.Server,
   poolContract: string,
 ): Promise<Array<{ commitment: string; index: number }>> {
   const health = await server.getHealth();
-  // Start close to the latest ledger: pool was just deployed so all events are recent.
-  // Using oldestLedger causes the RPC to scan an enormous empty range and return early.
-  // 10_000 ledgers ≈ 14h back at ~5s/ledger — covers any same-day deposit history.
-  const startLedger = Math.max(health.latestLedger - 10000, health.oldestLedger);
+  // Scan the entire RPC retention window (~7 days on Stellar public testnet).
+  // The pool is the only contract emitting NewCommitmentEvent we care about,
+  // so the extra range is cheap — pagination makes it linear in event count.
+  const startLedger = health.oldestLedger;
 
   const allRawEvents: rpc.Api.EventResponse[] = [];
   let cursor: string | undefined;
 
   // Paginate until we exhaust all events (each page is capped at 200 by the RPC).
-  for (let page = 0; page < 20; page++) {
+  // Upper bound is generous — with a 7-day retention and one event per deposit
+  // this is way more than enough for any realistic pool size.
+  for (let page = 0; page < 50; page++) {
     try {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const params: any = {
@@ -144,7 +157,7 @@ async function fetchAllPoolCommitments(
       }
       const evResp = await server.getEvents(params);
       allRawEvents.push(...evResp.events);
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      // eslint-disable-next-line @typescript-eslint/no-explicitany
       cursor = (evResp as any).cursor as string | undefined;
       if (evResp.events.length < 200) break;
     } catch (e) {

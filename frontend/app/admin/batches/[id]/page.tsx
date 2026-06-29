@@ -104,6 +104,7 @@ export default async function BatchDetail({
           batchId={batch.id}
           status={batch.status}
           sppDepositRef={batch.sppDepositRef}
+          sppDepositTxRef={batch.sppDepositTxRef}
           totalAmount={batch.totalAmount}
         />
 

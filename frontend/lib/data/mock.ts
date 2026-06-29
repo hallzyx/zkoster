@@ -45,6 +45,7 @@ const payouts: Payout[] = [];
       employeeCount: seed.amounts.length,
       settlementRef: seed.settlementRef,
       sppDepositRef: seed.sppDepositRef ?? null,
+      sppDepositTxRef: seed.sppDepositTxRef ?? null,
     });
   });
 })();
