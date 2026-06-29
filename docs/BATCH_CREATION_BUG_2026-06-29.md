@@ -444,3 +444,65 @@ are clear:
 - Testnet: the Nethermind pool contract remains buggy and rejects
   valid Claim proofs. No path to a green E2E without an upstream
   contract redeploy.
+
+## 8. Contracts redeployed (2026-06-29, after the batch creation doc)
+
+The bug was that the deployed testnet contracts were *built from*
+Nethermind SPP source that contained a typo in the BN254 prime
+constant (`BN256_MOD_BYTES` and `BN254_PRIME` had `0xf0000001` in
+the last 4 bytes instead of the real prime's `0xef676981`).
+Since the `spp-prover` was deployed by `zkoster-admin` (the
+GATDWJ4KQSPP2SRREX6ZEXDW5ATVNEEEUZN6AX2LIWMEFZQXJF6BURTP admin
+key), and the contracts were deployed with the buggy Nethermind
+WASM, the contracts on-chain were also buggy — and Nethermind
+shared the verifier/asp across all pools, so the fix needed to
+include all four Nethermind-derived contracts plus the pool.
+
+### New contract addresses (deployed 2026-06-29 from the patched WASM)
+
+| Contract                | Address (new)                                      | Note |
+|-------------------------|----------------------------------------------------|------|
+| `circom_groth16_verifier` | `CBXNZXZHHCYVO56TFLUEVAJ73FEOJP4NRUCE3SSJYS4K7YK4LWLKRI74` | replaces `CBKOZTEYI5RAGSUKWAQEC4V6MRYDC4KL2D3PRPKMLWHTMXMFSCBVUJXX` |
+| `asp_membership`         | `CAR24L4BAD7Q457VOXYEJJCQYKECH5FQYICMZV4UDTDDV6OVSEYPHBXN` | replaces `CAMMKUKPKTR73DGBD5CLYXWDUYI6DP2EKUREW6O3L65EAZMF6GXJRMPK` |
+| `asp_non_membership`     | `CDXTO34MQREF7W4B27WCFSPE3NDPBNS6XJJFWTKOJUZPJJGKSIO6FT3Q` | replaces `CAOD7JDSOQ5IYX77KX4AFMZDGHIH3JQU2AZ2DKOBH6U5PGUSTGGWSZBA` |
+| `public_key_registry`    | `CAKA7WMTPSKBJPWKTXQGUYU2CLDDID46BYYPMKZPYVN3UJJHOUMKTJNZ` | replaces `CBBWNJ75EQDPQWJJDZ2WHMJWPLDYDQUCTL2V6F23VG3JAL3PEYZSNL4S` |
+| `pool` (USDC)             | `CBZCCO4OCPDLC4JTJ5OPF7SUKQZWS3OWDV3RP35XMAK6E4SGFKD6TQC3` | replaces `CALWH3FKYAEVI4HMLWTMLFRVJSQ45ZGIQYQR32PX6BONK2YSKACZ5IWL` |
+
+All five contracts were built from the corrected Nethermind source
+(`/tmp/spp/contracts/soroban-utils/src/constants.rs` line 8 with the
+`BN256_MOD_BYTES` typo fixed: `240, 0, 0, 1` → `239, 103, 105, 129`).
+The pool was deployed with `--admin`, `--verifier` (the new
+verifier above), `--token` (the Circle testnet USDC SAC
+`CBIELTK6YBZJU5UP2WWQEUCYKLPU6AUNZ2BQ4WWFEIE3USCIHMXQDAMA`),
+`--asp_membership`, `--asp_non_membership` (both new), `--maximum_deposit_amount`
+(1000000000000 stroops), and `--levels` (10). The admin is
+`GATDWJ4KQSPP2SRREX6ZEXDW5ATVNEEEUZN6AX2LIWMEFZQXJF6BURTP`,
+which is the same key that deploys our Zkoster contracts.
+
+### Frontend `config.ts` updated
+
+`frontend/lib/spp/config.ts` now points at the new addresses. The old
+`poolUsdc` (`CALWH3FKY...`) is preserved as `poolUsdcBuggy` for
+archival. The `verifier`, `aspMembership`, `aspNonMembership`, and
+`pubkeyRegistry` entries all point at the new addresses.
+
+### Open follow-up
+
+The new contracts' ASP membership tree is empty
+(`get_root → 2302223575749844940221218608817648865122641281382153518325924961250440546344`).
+The demo leaf computed by the spp-prover at startup is
+`5ee209d9c359c5da866447882b9da932123c1a75b4ea329226a1d871c09d2b1e`.
+For the prover to generate a withdraw proof that the new ASP accepts,
+that leaf must be inserted into the new `asp_membership` tree. This is
+done by the `insert_member` admin call on the new ASP contract. The
+demo does not yet have a UI flow for this; it was done manually in
+prior sessions via direct contract invocation. After inserting the
+leaf, a fresh `get_root` should return a different value (the Poseidon2
+hash of the inserted leaf), and the prover's `membership_proof` will
+need to be regenerated against that root. The `asp_membership_root`
+override in the request body (from the prior `6e0cfca` fix) handles
+this transparently — the prover will use whatever root the caller
+passes, and the verifier checks it against the on-chain `get_root` of
+the new `asp_membership` contract. So once the leaf is in and the new
+`get_root` is captured into the request, the full E2E Claim path
+should land.

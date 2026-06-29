@@ -13,23 +13,36 @@ export const SPP_CONTRACTS = {
   /** Previous pool — bound to native XLM SAC. Kept for reference. */
   poolNativeXlm: "CBHXAGR6CLDIGT6MR42EXWDI2XHD6RZRVTCZZWHVMRBYYSGCQW5O4ORM",
   /**
-   * Active USDC pool — deployed 2026-06-28 using the same SPP WASM (hash
-   * f9cf9c2f…) bound to the Circle testnet USDC SAC
-   * (`CBIELTK6YBZJU5UP2WWQEUCYKLPU6AUNZ2BQ4WWFEIE3USCIHMXQDAMA`,
-   *  asset = USDC:GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5).
+   * Old USDC pool — deployed 2026-06-28 using the Nethermind SPP WASM (hash
+   * f9cf9c2f…) bound to the Circle testnet USDC SAC. The deployed bytecode
+   * has the BN256_MOD_BYTES off-by-10_000_000 typo, so it rejects valid proofs
+   * with `WrongExtAmount = 6`. Replaced by `poolUsdcFixed` on 2026-06-29
+   * after rebuilding the Nethermind sources with the modulus corrected.
+   * Kept here for reference; do NOT use for live flows.
+   */
+  poolUsdcBuggy: "CALWH3FKYAEVI4HMLWTMLFRVJSQ45ZGIQYQR32PX6BONK2YSKACZ5IWL",
+  // ^ alias for the CAL...IWL deployment that had the BN256_MOD_BYTES
+  // typo. Renamed from `poolUsdcLegacy` to avoid clashing with the
+  // legacy `poolUsdcLegacy: CB...STC` above (line 8).
+  /**
+   * Active USDC pool — deployed 2026-06-29 from Nethermind SPP source patched
+   * locally to fix the BN256_MOD_BYTES typo (limb 0 changed from
+   * `0x43e1f593f0000001` to `0x43e1f593ef676981`). Bound to the Circle
+   * testnet USDC SAC (`CBIELTK6YBZJU5UP2WWQEUCYKLPU6AUNZ2BQ4WWFEIE3USCIHMXQDAMA`,
+   * asset = USDC:GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5).
    * Deposits pull real USDC and claims pay USDC to the recipient.
    */
-  poolUsdc: "CALWH3FKYAEVI4HMLWTMLFRVJSQ45ZGIQYQR32PX6BONK2YSKACZ5IWL",
+  poolUsdc: "CBZCCO4OCPDLC4JTJ5OPF7SUKQZWS3OWDV3RP35XMAK6E4SGFKD6TQC3",
   /** Empty ASP membership tree (depth 10). Root = Poseidon2 empty-tree canonical value. */
-  aspMembership: "CBTOY7I7SERRSAOTUAY7CAMHZZBZS2MYOUQUAW7BE6L3SOA7T3NCHCUU",
+  aspMembership: "CAR24L4BAD7Q457VOXYEJJCQYKECH5FQYICMZV4UDTDDV6OVSEYPHBXN",
   /** Empty ASP non-membership SMT. Root = 0. */
-  aspNonMembership: "CC3VYWSZBIQCBDXP2XXQIY22CUKBQSYDMU7ER4POXMVDATLZRRYJGFET",
+  aspNonMembership: "CDXTO34MQREF7W4B27WCFSPE3NDPBNS6XJJFWTKOJUZPJJGKSIO6FT3Q",
 
-  // --- Shared (Nethermind, immutable) ---
+  // --- Shared (zkoster-admin redeployed 2026-06-29 with the modulus fix) ---
   /** Circom Groth16 verifier (BN254). Shared across all pools. */
-  verifier: "CBKOZTEYI5RAGSUKWAQEC4V6MRYDC4KL2D3PRPKMLWHTMXMFSCBVUJXX",
+  verifier: "CBXNZXZHHCYVO56TFLUEVAJ73FEOJP4NRUCE3SSJYS4K7YK4LWLKRI74",
   /** On-chain public-key registry for note encryption. */
-  pubkeyRegistry: "CBBWNJ75EQDPQWJJDZ2WHMJWPLDYDQUCTL2V6F23VG3JAL3PEYZSNL4S",
+  pubkeyRegistry: "CAKA7WMTPSKBJPWKTXQGUYU2CLDDID46BYYPMKZPYVN3UJJHOUMKTJNZ",
 } as const;
 
 /** Active pool for deposit/claim flows — settles in real USDC. */
