@@ -351,21 +351,27 @@ export async function reviewBatchFromRows(
     }
   }
 
-  // Guard: poll get_batch until employee_count > 0 (RPC state propagation lag).
-  // Simulation of review_batch reads employee_count; if stale, it returns EmptyBatch.
+  // Guard: poll get_batch until employee_count >= rows.length.
+  // Stellar testnet RPC is load-balanced — simulateTransaction can hit a node
+  // that hasn't applied the add_payout ledger yet. Poll for up to ~3 minutes.
   const server = new rpc.Server(cfg.rpcUrl);
-  for (let poll = 0; poll < 20; poll++) {
-    const src = new Account(Keypair.random().publicKey(), "0");
-    const readTx = new TransactionBuilder(src, { fee: BASE_FEE, networkPassphrase: cfg.networkPassphrase })
-      .addOperation(new Contract(cfg.payrollId).call("get_batch", u64(batchId)))
-      .setTimeout(30)
-      .build();
-    const sim = await server.simulateTransaction(readTx);
-    if (!rpc.Api.isSimulationError(sim) && sim.result) {
-      const raw = scValToNative(sim.result.retval) as { employee_count?: bigint } | null;
-      if (raw && Number(raw.employee_count ?? 0) >= rows.length) break;
-    }
+  for (let poll = 0; poll < 60; poll++) {
     await new Promise((r) => setTimeout(r, 3000));
+    try {
+      const src = new Account(Keypair.random().publicKey(), "0");
+      const readTx = new TransactionBuilder(src, { fee: BASE_FEE, networkPassphrase: cfg.networkPassphrase })
+        .addOperation(new Contract(cfg.payrollId).call("get_batch", u64(batchId)))
+        .setTimeout(30)
+        .build();
+      const sim = await server.simulateTransaction(readTx);
+      if (!rpc.Api.isSimulationError(sim) && sim.result) {
+        const raw = scValToNative(sim.result.retval) as { employee_count?: bigint } | null;
+        const count = Number(raw?.employee_count ?? 0);
+        if (count >= rows.length) break;
+      }
+    } catch {
+      // transient RPC error — keep polling
+    }
   }
 
   // Step 4: finalize review with the total commitment (sum check on-chain).

@@ -241,7 +241,10 @@ export async function depositToPrivacyPoolAction(
     }
 
     const kp = roleKeypair(ROLE.ADMIN);
-    const amount = BigInt(totalAmount);
+    // totalAmount is in display units where 1000 = 1 USDC.
+    // USDC has 7 decimals on Stellar (1 USDC = 10_000_000 stroops).
+    // Conversion: stroops = (totalAmount / 1000) * 10_000_000 = totalAmount * 10_000
+    const amount = BigInt(totalAmount) * 10_000n;
 
     const result = await depositToPool(amount, kp.publicKey(), kp);
     const txHash = result.txHash;
