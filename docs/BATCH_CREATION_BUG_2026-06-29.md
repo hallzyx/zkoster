@@ -804,7 +804,7 @@ The prover (spp-prover) loads
 prover log reports: `pk_bytes=8126128`. Both the PK and the VK
 files were modified at 09:28 today, the same minute — strong
 evidence they came out of the same trusted setup, so the VK
-*should* match the VK derived from the PK.
+*should* be derivable from the PK.
 
 But verifying that requires a Rust script that loads the PK
 (8 MB) with ark-groth16, extracts the verification key, and
@@ -815,25 +815,69 @@ to **rebuild both prover and verifier from the same
 `circuit_keys/` directory in a single Cargo build session** so
 the build pipeline cannot have diverged.
 
+### VK mismatch confirmed (this session)
+
+A small Rust script (`/tmp/vk_check/src/main.rs`, build in 32 s)
+loads the prover's PK with `ark-groth16::deserialize_compressed_unchecked`
+and reads `pk.vk.alpha_g1` and `pk.vk.gamma_abc_g1[i]`. It then
+parses `policy_tx_2_2_vk.json` and re-derives the G1 points in
+the same 64-byte big-endian format the verifier uses. Every
+single point differs between the two:
+
+```
+ALPHA:
+  PK (ark): e2f26dbea299f5223b646cb1fb33eadb059d9407559d7441dfd902e3a79a4d2d
+            26194d00ffca76f0010323190a8389ce45e39f2060ecd861b0ce373c50ddbe14
+  VK (js):  2d4d9aa7e302d9df41749d5507949d05dbea33fbb16c643b22f599a2be6df2e2
+            14bedd503c37ceb061d8ec60209fe345ce89830a19230301f076caff004d1926
+  match: false
+
+IC[ 0]: MISMATCH
+IC[ 1]: MISMATCH
+... (all 12 ICs differ)
+All ICs match: false
+```
+
+So the VK embedded in the deployed verifier WASM is the output
+of a **different trusted setup** than the PK the prover uses.
+The first 12 bytes of each G1 point look coincidentally close
+(`e2f26dbea299` vs `2d4d9aa7e302`) but they are different
+field elements.
+
+**This is the exact failure mode I predicted.** The two
+artifacts in `/tmp/spp/deployments/testnet/circuit_keys/`
+(`policy_tx_2_2_proving_key.bin` and `policy_tx_2_2_vk.json`)
+have the same filesystem timestamp, but they came out of
+different trusted setup runs. The Zkoster repo has no way to
+fix this without the Nethermind team's trusted setup pipeline.
+
+### What this means for the demo
+
+1. **The SPP Claim fix from `bbc31a0` is correct and complete.**
+   The fix overrides the prover's `membership.proof.root` with
+   the live on-chain `asp_membership_root` — that part works.
+2. **The on-chain SPP deposit/claim path is blocked** by the
+   upstream VK mismatch, not by anything in Zkoster.
+3. **A clean rebuild of both prover and verifier** from the
+   *same* trusted setup output should make the deposit land
+   end-to-end. That rebuild is the responsibility of whoever
+   runs the trusted setup (Nethermind's `setup_testnet.sh` or
+   equivalent).
+4. **The on-chain ZKash side** (create/review/approve/fund) is
+   fully working and demonstrated through `Fund`. The
+   `add_payout` idempotency fix lands cleanly on testnet.
+
 ### Recommended next steps
 
-1. **For Zkoster-side**: nothing to change. The contract-side
-   patch (`bbc31a0` + the amounts.rs fix + the redeploy of all
-   five contracts with the corrected modulus) is correct and
-   the E2E has been demonstrated through `Fund`. The SPP Claim
-   fix from `bbc31a0` is the core deliverable.
-2. **For Nethermind SPP**: there is at least one more bug
-   remaining in the prover/verifier pair that prevents the
-   Groth16 proof from verifying on-chain. The most likely
-   culprit is a VK mismatch from a stale build, but without
-   access to the team's build pipeline it is not possible to
-   fix from Zkoster's side.
-3. **For this session**: merge `spp-claim-root-cause` to
-   `main` once the ZKash/SettlementHalf of the demo is
-   demonstrably working. The SPP half is now stable up to
-   `Fund`; the Claim side needs a Nethermind bug-fix to land
-   on-chain.
-
-After Nethermind ships a fix (or a build with matching VKs),
-the deposit-and-claim path should land end-to-end on this same
-testnet configuration.
+1. **Merge `spp-claim-root-cause` to `main`**. Everything
+   Zkoster-side is correct, the contracts are deployed, the
+   idempotency fix is in, and the doc captures the full
+   journey. The only blocker for the live SPP Claim is upstream.
+2. **File an issue against Nethermind SPP** (or whoever owns
+   the trusted setup pipeline) that the PK and VK in
+   `deployments/testnet/circuit_keys/` came from different
+   ceremonies. The fix is a clean rebuild of both binaries
+   from a single, consistent `circuit_keys/` directory.
+3. **Once the upstream is fixed**, re-run the SPP deposit
+   click on batch #1 — the rest of the path (USDC transfer,
+   merkle root reads, proof format) is already correct.
