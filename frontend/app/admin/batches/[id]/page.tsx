@@ -64,13 +64,17 @@ export default async function BatchDetail({
           />
         </div>
 
-        <BatchActions batchId={batch.id} status={batch.status} />
-
         <SppDepositStep
           batchId={batch.id}
           status={batch.status}
           sppDepositRef={batch.sppDepositRef}
           totalAmount={batch.totalAmount}
+        />
+
+        <BatchActions
+          batchId={batch.id}
+          status={batch.status}
+          sppDepositRef={batch.sppDepositRef}
         />
 
         <DisclosureGrantsPanel batchId={batch.id} />

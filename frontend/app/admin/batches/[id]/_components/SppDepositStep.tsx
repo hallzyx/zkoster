@@ -89,7 +89,7 @@ export function SppDepositStep({
             Privacy Pool deposit
           </span>
           <span className="text-xs text-slate-500">
-            Demo: using privacy pool architecture. Proof generation is simulated.
+            Privacy-preserving deposit: amount is moved into a Groth16 private pool.
           </span>
         </div>
 
