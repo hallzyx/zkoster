@@ -379,13 +379,68 @@ would compute `p - 10_000_000`, matching the proof.
 A second, deeper issue was uncovered when testing with
 `withdraw_amount_stroops: 1000`: the `ext_data.ext_amount` returned by
 the prover is `-281474976709672960` (i.e. `-(2^48 * 1000 - 65536)`)
-rather than the expected `-1000`. This is a Soroban `I256`
-serialization quirk — the value is correct in the prover's internal
-representation but is being mangled somewhere in the
-`i128_to_i256_scval` path. The Nethermind team's
-`pool::calculate_public_amount` uses the same `I256` arithmetic on
-the contract side, and it may be relying on the same buggy
-serialization to "cancel out" against an internal off-by-10M in the
-field element. Until the contract is redeployed from a clean
-Nethermind source, full E2E on this testnet is gated on those
-upstream changes.
+rather than the expected `-1000`. Decoding the on-wire I256
+(`spp-prover/src/soroban_encode.rs:46-53`):
+
+```
+Expected for n = -1000:
+  i128 BE bytes = fffffffffffffffffffffffffffffc18
+  lo_lo (bytes[8..16]) = 0xfffffffffffffc18
+  Full I256 BE = ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffc18
+
+Actual on-wire (last 8 bytes):  fc 18 00 00 00 0f 00 00
+```
+
+The 8 bytes of the `lo_lo` field are not what `u64::from_be_bytes`
+would produce. The exact mechanism (SDK-level XDR encoding quirk,
+incorrect u64 endianness, or some other failure) is not yet clear
+without a deeper dive into stellar-xdr crate internals. Two things
+are clear:
+
+1. The Nethermind contract's `i256_abs_to_u256` (line 478) and
+   `i256_to_i128_nonneg` (line 289) likely produce the *same* mangled
+   value, so the contract and the prover are probably consistent with
+   each other in their "brokenness" — and that is why the testnet
+   pool's pre-fix state was at least internally self-consistent
+   enough to pass earlier test runs.
+2. The off-by-10M typo in the deployed contract's `BN256_MOD_BYTES`
+   combines with this I256 serialization quirk in a way that breaks
+   full E2E. The fix is to redeploy Nethermind's contracts from
+   clean source.
+
+## 6. Recommended next steps (out of scope for this session)
+
+1. **Upstream fix in Nethermind SPP**: the `BN256_MOD_BYTES` and
+   `BN254_PRIME` typos need to be fixed in Nethermind's source, and
+   the contracts redeployed. The Zkoster-side prover fix from
+   `bbc31a0` plus the local amounts.rs patch from this session
+   is necessary but not sufficient.
+2. **Investigate the I256 serialization in stellar-xdr**: the
+   `i128_to_i256_scval` function may need to be re-derived to match
+   the actual on-wire layout the deployed contracts expect. A
+   2-byte direct test against a known contract would clarify
+   whether the function should serialize the `i128` bytes
+   in a different order, or whether the `hi_lo`/`lo_hi`/etc. fields
+   in `Int256Parts` are interpreted in a different byte order than
+   what the current code assumes.
+3. **Merge the Zkoster-side fix to main**: the `bbc31a0` patch plus
+   the `e2e-claimed` artifacts and the docs in this commit are
+   individually correct. Merging them does not change the E2E
+   outcome (the contract bug blocks it) but keeps the Zkoster-side
+   state in a known-good place for the next session.
+
+## 7. End-of-session state
+
+- `spp-prover` (Ubuntu WSL, port 8788): running, rebuilt with the
+  amounts.rs fix and clean (no debug prints), binary at
+  `/home/arroz/projects/Zkoster/spp-prover/target/release/spp-prover`.
+  The `BN254_PRIME` and `BN254_MODULUS_BE` constants in
+  `/tmp/spp/app/crates/core/types/src/amounts.rs` are corrected to
+  match the real BN254 prime. These are local changes in
+  `/tmp/spp/` (a clone) — they do not propagate back to Nethermind
+  and will not survive a re-clone.
+- `zkoster-prover` (Windows, port 8787): running, unchanged.
+- `frontend dev` (port 3000): running, unchanged.
+- Testnet: the Nethermind pool contract remains buggy and rejects
+  valid Claim proofs. No path to a green E2E without an upstream
+  contract redeploy.
