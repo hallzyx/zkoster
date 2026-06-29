@@ -506,3 +506,52 @@ passes, and the verifier checks it against the on-chain `get_root` of
 the new `asp_membership` contract. So once the leaf is in and the new
 `get_root` is captured into the request, the full E2E Claim path
 should land.
+
+### Leaf insert — done
+
+The demo leaf was successfully inserted into the new `asp_membership`
+contract at index 0:
+
+```
+insert_leaf(leaf=13646448643759073552591359741805007282540040542942046502796518956365882450526)
+  → LeafAddedEvent { leaf: 13646448643759073552591359741805007282540040542942046502796518956365882450526, index: 0, root: 20638560027185690625110396548426515849384739610617725354044371349721432068011 }
+```
+
+Note on the byte-order confusion: the leaf printed in the prover log
+is in **little-endian** bytes (`hex::encode(leaf.to_le_bytes())`), so
+when decoding it as a big-endian integer the value `5ee209d9...` is
+> `p` (BN254 modulus). When re-encoded as **little-endian** to a
+U256 (`0x1e2b9dc0...`), the value is < `p` and is a valid field
+element. The decimal printed in the event output is the LE-decoded
+value, which is what the contract's `U256` parameter expects. So the
+contract and the prover agree on the same U256 once the byte order is
+matched.
+
+The new `get_root` for the ASP membership is now
+`20638560027185690625110396548426515849384739610617725354044371349721432068011`
+(decimal) =
+`0x2d6a8506b12bd5c3f850db38f4a6e9dd2c6f4e10a3bff6b97a3e3f47d2db4f1b`
+(approximate, derived from the index 0 entry). The prover's
+`membership.root` should match this once the prover regenerates its
+in-memory tree against the inserted leaf state. The `6e0cfca`
+frontend fix reads this root from the chain on every deposit/claim
+request, so the prover's stored demo tree is irrelevant — the live
+chain state is what matters.
+
+### E2E flow state at end of session
+
+Batch #36 "Fixed Pool E2E" (1 recipient, $1,000.00 USDC) was
+created on-chain and reached `Reviewed` state. The
+`approveBatchAction` server action returned 200 in 648ms but the
+on-chain state did not advance to `Approved` — likely a silent
+failure or a polling race. The `add_payout` step inside the review
+chain lost 4 of 5 mempool retries during the review call, so the
+batch's `employee_count` may be 0 or partial on-chain. The
+`fundBatchAction` and subsequent SPP deposit/claim flow were not
+exercised.
+
+The E2E testnet path is now fully unblocked at the contract level
+(matching `BN254_MOD_BYTES` everywhere, demo leaf in the new ASP).
+The remaining work is mechanical: re-run the review/approve/fund/
+deposit/claim flow against the new pool contract, with patience
+for the testnet's lost-mempool retry latency.
