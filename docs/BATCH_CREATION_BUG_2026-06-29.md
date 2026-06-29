@@ -780,6 +780,41 @@ The most likely cause is #1. To verify, the next session should:
 - If they differ, rebuild both from the same
   `circuit_keys/` directory and redeploy.
 
+### Verifier VK is built from policy_tx_2_2_vk.json
+
+The deployed verifier WASM (hash `1f3a7ab3...`) was built with:
+
+```
+VERIFIER_VK_JSON=/tmp/spp/deployments/testnet/circuit_keys/policy_tx_2_2_vk.json \
+  cargo build -p circom-groth16-verifier --release
+```
+
+The file `policy_tx_2_2_vk.json` is 3910 bytes and was last
+modified at 09:28 today. The build script's `build.rs:101-105`
+parses it and emits `vk.rs` with hardcoded Rust constants
+`VK_ALPHA_G1`, `VK_BETA_G2`, `VK_GAMMA_G2`, `VK_DELTA_G2`,
+`VK_IC: [[u8; 64]; 12]`. Those constants are `include!`-ed into
+`lib.rs` at compile time.
+
+### Prover uses policy_tx_2_2_proving_key.bin
+
+The prover (spp-prover) loads
+`/home/arroz/projects/Zkoster/spp-prover/artifacts/policy_tx_2_2_proving_key.bin`
+(8,126,128 bytes) at startup. The bin size matches what the
+prover log reports: `pk_bytes=8126128`. Both the PK and the VK
+files were modified at 09:28 today, the same minute — strong
+evidence they came out of the same trusted setup, so the VK
+*should* match the VK derived from the PK.
+
+But verifying that requires a Rust script that loads the PK
+(8 MB) with ark-groth16, extracts the verification key, and
+compares it byte-for-byte against the constants in
+`policy_tx_2_2_vk_const.rs` (or the regenerated `vk.rs`). That
+script is 1-2 hours of work, and a more productive next step is
+to **rebuild both prover and verifier from the same
+`circuit_keys/` directory in a single Cargo build session** so
+the build pipeline cannot have diverged.
+
 ### Recommended next steps
 
 1. **For Zkoster-side**: nothing to change. The contract-side
