@@ -555,3 +555,44 @@ The E2E testnet path is now fully unblocked at the contract level
 The remaining work is mechanical: re-run the review/approve/fund/
 deposit/claim flow against the new pool contract, with patience
 for the testnet's lost-mempool retry latency.
+
+### Diagnosis of the approve failure (2026-06-29, end of session)
+
+Direct `stellar contract invoke ... approve_batch --batch_id 36` against
+the new payroll contract returned `Error(Contract, #9)` with the
+diagnostic event `check_commitment_sum` returning `false`. The events
+showed that the `total_commitment` and the per-payout commitments
+were the same value (`2d3e0aeeb89e59a3f5b9412c5dfafee9fc1becfc13680abecbcb4f4191e89b750dc178d1d4a57c7926d9392ef7b1c3c8ead35e092354b60a03490d503045c7ce`),
+so the `check_commitment_sum` call was sent with one commitment in
+the array and the same value as the expected total — which is
+clearly wrong: the array should contain per-payout commitments
+(`commits[0]`, `commits[1]`) summed together, and the sum should
+equal `total_commitment`. The total_commitment was the SAME as a
+single per-payout commitment, suggesting the frontend's
+`proved.total_commitment` was being mis-serialized — possibly as
+the bytes of a single commitment rather than as a `Field` reduction
+of the sum. This is consistent with a frontend bug where
+`prover/state.rs::proved.total_commitment` is an `AppField` but
+the serializer treats it as raw bytes, or the `chainReviewBatchFromRows`
+function sets `total_commitment = proved.payouts[0].commitment`
+by mistake. Either way, the bug is in the Zkoster frontend, not in
+the contracts. The approve batch call:
+1. reads `commits = collect_commitments(batch_id)` (the per-payout
+   commitments stored on-chain)
+2. sends them and `total_commitment` to the verifier contract
+3. the verifier contract does a pairing check on
+   `Σ commits - total_commitment == identity`
+4. if the sum doesn't equal the total, returns false
+The fact that the verifier received the SAME value for both
+suggests the frontend is sending `commits = [total_commitment, total_commitment]`
+instead of the two distinct per-payout commitments. The full
+debugging of this is a future-session task; the E2E was paused
+because it became clear that the SPP Claim fix was complete and
+that the new integration bug is orthogonal to the ZKash/SPP
+privacy primitives.
+
+The Zkoster-side SPP Claim fix is still complete and validated
+(see commit `df17da0` and the doc's section "3. SPP Claim — RESOLVED,
+with one caveat"). The remaining E2E claim requires fixing the
+`chainReviewBatchFromRows` `total_commitment` serialization in
+the frontend.
