@@ -117,81 +117,91 @@ in stroops, mapped in `ext_data_hash`). The ZK proof's `public_amount`
 field carries the value `21888242871839275222246405745257275088548364400416034343698204186575798495617`
 which is `0x30644e72e131a029b85045b68181585d2833e84879b9709143e1f593ef676981`.
 
-That value is **exactly the BN254 scalar field modulus `p`**
-(`/tmp/spp/app/crates/core/types/src/amounts.rs:458-485` does
-`Field::try_from(ExtAmount::from(x))` → for `x < 0` returns
-`Field(p - |x|)`; for `x = 0` returns `Field(0)`). Since the bytes
-serialized are not all-zero, the value is `Field(0)` represented via
-`Field::to_be_bytes()` on `Field(p)` — which is the canonical
-canonicalization Nethermind uses (see `Field::canonicalize` in
-`/tmp/spp/app/crates/core/types/src/amounts.rs`).
+That value is **exactly the BN254 scalar field modulus `p`** —
+the canonical encoding of the field element `0`. Confirmed by
+base64-decoding the XDR `proof_scval_xdr_b64` returned by a direct
+curl against the running spp-prover and reading the 32 bytes at the
+`public_amount` key offset (type byte 0x0000000b = I256, body
+`0x30644e72...676981` = `p`).
 
-So the proof was generated with `ext_amount = 0`, not `-10_000_000`.
-Either:
+The contract's `transact` (`/tmp/spp/contracts/pool/src/pool.rs:567`)
+computes:
+```rust
+let expected_public_amount =
+    Self::calculate_public_amount(env, ext_data.ext_amount.clone())?;
+if proof.public_amount != expected_public_amount { return Err... }
+```
+where `calculate_public_amount(ext_amount = -10_000_000)` returns
+`FIELD_SIZE - 10_000_000` = `0x30644e72...eeced301` per the
+`else { field.sub(&neg_u256) }` branch at `pool.rs:324-328`.
 
-1. The `ExtAmount` the prover received was already 0 (a routing bug in
-   the patch, the handler, or the wire encoding), or
-2. The `ExtAmount` was correct (`-10_000_000`) but somewhere between
-   `withdraw.rs:149` (`let withdraw_amount = ExtAmount::from(req.withdraw_amount_stroops as i128)`)
-   and `flows.rs:566` (`let public_amount_field = Field::try_from(ext_amount)?`)
-   it gets reset to zero.
+So the contract expects `0x...eeced301` and the proof delivers `0x...676981` (= p, the canonical form of `0`).
+Verifier calls `verify(proof, [ext_data_hash, public_amount, ...])` where
+`public_amount = p`, the witness was generated with `public_amount = 0`
+(in the field — same value), and the pairing check fails because the
+public inputs `ext_data_hash` (computed from `ext_amount = -10M`) and the
+witness's binding to `public_amount = 0` are inconsistent.
 
-The patch on the prover side looks correct: `flows.rs:362` does
-`withdraw_amount.checked_neg()` so the `ext_amount` that reaches
-`Field::try_from` is `-10_000_000`. The conversion in amounts.rs:485
-returns `Field(p - 10_000_000)`, which is `0x30644e72eeced301...`, **not**
-`Field(p)`.
+The `ext_amount` itself is correct: a direct decode of the
+`ext_data_scval_xdr_b64` returned by the prover shows the field at the
+`ext_amount` key has type `0x0000000c` (I256) and value
+`0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff676980`,
+which two's-complement-decodes to `−10_000_000`. So the prover is
+faithfully putting `−10_000_000` into the `ext_data` it returns, but
+the `public_amount` field in the proof it returns is `0`, not
+`p - 10_000_000`.
 
-A direct curl against the running spp-prover with
-`withdraw_amount_stroops: 10_000_000` reproduces the
-`public_amount = p` value in the returned `proof_scval_xdr_b64` (verified
-by base64-decoding the XDR and reading the U256 at the `public_amount`
-key offset). The same call with `withdraw_amount_stroops: 0` returns
-`public_amount = 0`. So the prover is faithfully mapping
-`withdraw_amount_stroops → public_amount` with the negative-correct
-negation: `0 → 0`, `10_000_000 → p`. But the contract-side `ext_amount`
-in `ext_data` is `-10_000_000`, so the on-chain check
-`ext_data_hash = hash(ext_amount, encrypted_outputs, ...)` disagrees
-with the proof's `public_amount`, and the pairing check fails because
-the witness was bound to the wrong `public_amount`.
+Either the `ext_amount` the prover received is **not** `−10_000_000`
+(the wire-encoding from the patched `withdraw.rs:149` is wrong, or
+`req.withdraw_amount_stroops` is read as 0 somewhere), or the
+`Field::try_from` call in the prover's `flows.rs:566` is being
+given `0` and not `−10_000_000`. The patch on `withdraw.rs:149`:
+```rust
+let withdraw_amount = ExtAmount::from(req.withdraw_amount_stroops as i128);
+```
+combined with `flows.rs:362`:
+```rust
+ext_amount: withdraw_amount.checked_neg()?
+```
+looks correct on paper. `req.withdraw_amount_stroops` is `u64`, the
+`as i128` cast preserves `10_000_000`, `.checked_neg()` gives
+`ExtAmount(-10_000_000)`, `Field::try_from(ExtAmount(-10_000_000))`
+returns `Field(p - 10_000_000)`.
 
-**Root cause is therefore on the frontend side, not the prover.**
-`claimFromPool` (`frontend/lib/spp/pool-client.ts:356`) builds the
-`ext_data` independently of the proof (line 417 builds the
-`ext_data` with the original negative `ext_amount`). The contract
-then verifies `ext_data_hash` against the proof's `public_amount`
-and they don't match. Likely the contract expects `public_amount` to
-be the **positive** representation of the magnitude (`+10_000_000`)
-while `ext_amount` is the signed transfer amount (`-10_000_000`). The
-Nethermind prover is built assuming positive `public_amount` for
-withdraw, and the contract does `public_amount = -ext_amount` internally.
-This needs to be confirmed against the pool contract's `transact`
-implementation in `/tmp/spp/contracts/pool/src/pool.rs` — specifically
-the section that builds the `public_amount` for the verifier call.
+A direct curl with `withdraw_amount_stroops: 10_000_000` against the
+running spp-prover returns `public_amount = p` (= canonical `0`),
+not `p - 10_000_000`. Same call with `withdraw_amount_stroops: 0`
+returns `public_amount = 0`. So the prover is faithfully passing
+`withdraw_amount_stroops = 0` to the witness — the `as i128` cast
+must be returning 0, or the JSON deserializer is reading the field
+as 0, or the `checked_neg` is being applied to a `0` and the bug
+is upstream of `withdraw.rs`. **This is the smoking gun**: whatever
+value the prover is computing `public_amount` from is `0`, not
+`−10_000_000`.
 
-### Fix scope (for a follow-up session)
-1. **Read `/tmp/spp/contracts/pool/src/pool.rs` around the `transact`
-   function** to see how `public_amount` is computed from `ext_amount`
-   in the contract. Specifically, does the contract pass
-   `ext_amount` directly to the verifier, or does it negate it first?
-2. **If the contract negates internally**, the fix is on the frontend
-   in `depositToPool` (line 264-274): it currently passes `pool_root` as
-   `computePoolRoot([])` (empty tree) for the deposit, but the correct
-   pre-deposit root should be `computePoolRoot(priorCommitments)`. For
-   the claim, the bug is that `ext_data` carries the *signed* amount
-   while the proof carries the *unsigned magnitude* — the contract is
-   likely passing the magnitude to the verifier. Either way, **the
-   proof is correct, the wire encoding to the contract is wrong.**
-3. **Likely root cause (most probable)**: in
-   `frontend/lib/spp/pool-client.ts` `extData` is built with
-   `ext_amount: -(amount)` (signed), and then `pool.transact(proof, ext_data, sender)`
-   is called. The contract then takes `ext_data.ext_amount` and uses it
-   as the verifier's `public_amount` *directly* (without negating). The
-   proof was generated with `public_amount = 10_000_000` (positive
-   magnitude), but the contract passes `-10_000_000` (signed). The
-   fix is to make the wire-side `ext_data.ext_amount` carry the same
-   signed encoding the prover used, or to negate it in the contract
-   call. Read `pool.rs::transact` first to confirm which side is wrong.
+### Next debug step (unblock — 5 min)
+1. Add a `println!("[DEBUG] ext_amount in flows::transact = {}",
+   ext_amount);` at `flows.rs:566` (right before the `Field::try_from`).
+2. `cargo build --release` in the spp-prover's working dir.
+3. Restart the prover.
+4. Direct curl with `withdraw_amount_stroops: 10_000_000`.
+5. Check stdout for the printed value.
+
+If the printed value is `0` → the `withdraw.rs:149` path or
+deserialization is broken (most likely a serde/JSON wire-encoding
+bug for `u64` with a leading digit, or the field name on the
+frontend doesn't match `withdraw_amount_stroops`).
+
+If the printed value is `-10000000` → the bug is somewhere between
+that line and the `proof_scval` assembly (a field that gets
+overwritten, or the canonicalization I speculated about earlier).
+
+If the printed value is `10_000_000` (positive, not negated) → the
+`.checked_neg()` at `flows.rs:362` is not being applied (the
+control flow for `WithdrawParams` is not entering the `withdraw`
+wrapper; `transact` is being called directly with positive amount).
+That would mean the `outputs: None` in the patched `withdraw.rs:158`
+is being treated as "deposit" path and the flow's neg logic skipped.
 
 ### Scratch notes from this session
 
@@ -205,6 +215,29 @@ the section that builds the `public_amount` for the verifier call.
 The proof in the Claim carries `...ef676981` (i.e. `p`), not
 `...eeced301` (i.e. `p - 10_000_000`). So the prover thinks
 `ext_amount = 0`, the contract thinks `ext_amount = -10_000_000`.
+
+Hex dump of the proof_scval at `public_amount` key (offset 796):
+- `7075626c69635f616d6f756e74` = "public_amount"
+- `0000000b` = ScValType I256 (12 in decimal, not 15 = U256 — note: a
+  bug or intentional design choice; Nethermind's `field_to_scval_u256`
+  in `spp-prover/src/soroban_encode.rs:36-43` returns `ScVal::U256`,
+  but the XDR output shows type 11. The contract's
+  `calculate_public_amount` returns `U256`, the comparison in
+  `transact` is between two `U256`s, so the deserializer on the
+  contract side must accept `I256` and treat as `U256` for the
+  comparison to work at all. This is worth a separate audit.)
+
+Hex dump of the ext_data_scval at `ext_amount` key (offset 332):
+- `6578745f616d6f756e74` = "ext_amount"
+- `0000000c` = ScValType I256
+- `ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff676980` = -10_000_000 in I256
+  two's complement
+
+So `ext_data.ext_amount` and `proof.public_amount` are unambiguously
+mismatched: the former is `−10_000_000`, the latter is `0`. The
+prover's mapping from request `withdraw_amount_stroops` to internal
+`ext_amount` (and thus to `public_amount`) is dropping the value to
+zero somewhere between the JSON request and the witness input.
 
 ## 3. State of `spp-claim-root-cause` at end of session
 
