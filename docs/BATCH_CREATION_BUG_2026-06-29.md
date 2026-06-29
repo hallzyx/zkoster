@@ -702,3 +702,65 @@ The 17 existing unit tests still pass (`cargo test -p zkoster-payroll`).
    loss would be cleaner.
 3. Merge `spp-claim-root-cause` to `main` once the full SPP
    Claim path lands on-chain.
+
+### Live E2E: Fund OK, SPP deposit fails with another Nethermind bug
+
+The new payroll with the idempotent fix took a fresh batch through
+`create -> review -> approve -> fund` cleanly:
+
+```
+POST /admin/batches/1 200 in 79s     (create+review chain, employee_count=1)
+POST /admin/batches/1 200 in 20.2s   (approve — check_commitment_sum passed)
+POST /admin/batches/1 200 in 13.0s   (fund — status 3 (Funded))
+```
+
+The SPP deposit click then failed with `Error(Contract, #0)` on
+the Nethermind verifier contract. The diagnostic events show:
+
+```
+0: HostError: Error(Contract, #0) — pool.transact failed
+1-4: The pool called verifier.verify with public_inputs
+5-6: asp_membership and asp_non_membership get_root calls returned
+     20638560027185690625110396548426515849384739610617725354044371349721432068011
+     and 0 (correct)
+7-10: USDC transfer from admin to pool contract succeeded (10M stroops)
+11: pool.transact called with the full proof and the right
+     asp_membership_root
+```
+
+So the USDC transfer happens, the merkle roots are right, and the
+proof bytes are well-formed. The verify fails because the
+`public_amount` in the proof is `655_360_000_000` instead of
+`10_000_000` — i.e. `10_000_000 * 2^16 = 10_000_000 << 16`.
+
+Direct curl to the spp-prover's `/spp/deposit` with the correct
+inputs (`amount_stroops: 10000000`, the live
+`asp_membership_root: 2da102d1f112694a0040c45f067ed7e239b5255f0bb69c0b529b8767e4d60fab`)
+returns a proof whose `public_amount` field is `655_360_000_000`
+instead of `10_000_000`. The extra factor `2^16 = 65536` is the
+fingerprint of an `i128 -> U256` left-shift bug: the prover takes
+the 16 LE bytes of the i128, reads them as 32 LE bytes of a U256,
+and forgets to clear the upper 16 bytes, so the value lands at
+offset 16 in the U256.
+
+`field_to_circuit_hex` (flows.rs:786) and `ext_amount_to_circuit_hex`
+(flows.rs:789) both call `field.to_le_bytes()` directly, but
+`Field::try_from(ExtAmount(10_000_000))` constructs the U256 from the
+i128 as `U256::from(10_000_000u128)`, which should be
+`0x0000_..._0098_9680` — yet the proof carries
+`0x0000_..._0000_0098_9680_0000` (i.e. shifted by 2^16). This is the
+exact shape you get when the `i128` is read as a 16-byte little-endian
+block and re-interpreted as 32 bytes with the upper 16 bytes unset
+(i.e. multiplied by 2^16). Some intermediate call site is
+serializing the i128 as 16 bytes, then reading those 16 bytes as the
+low half of a 32-byte buffer.
+
+The fix is in Nethermind SPP, not Zkoster. The contract-side
+patch (`bbc31a0` + amounts.rs fix + redeploy) is correct and the
+SPP deposit path *almost* works — the USDC transfer and the merkle
+root reads are good, the ZK proof is the only thing missing.
+
+After Nethermind ships a fix for the `i128 -> U256` left-shift bug
+in `ext_amount_to_circuit_hex`/`field_to_circuit_hex`, the
+deposit-and-claim path should land end-to-end on this same
+testnet configuration.
